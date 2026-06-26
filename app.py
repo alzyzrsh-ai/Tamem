@@ -1,13 +1,9 @@
 import streamlit as st
-import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
 import pandas as pd
-import folium
-from streamlit_folium import st_folium
-from folium.plugins import Geocoder
+import numpy as np
+import plotly.express as px
 
-# إعداد ; } وتصميم الواجهة العربية المخصصة
+# إعداد الصفحة وتصميم الواجهة العربية
 st.set_page_config(page_title="النظام الجيوفيزيائي", layout="wide")
 
 st.markdown("""
@@ -31,98 +27,74 @@ task = st.sidebar.selectbox("اختر المهمة المطلوبة:", [
 if task == "🛰️ الصور الجوية وإسقاط الإحداثيات":
     st.subheader("🛰️ مستكشف الصور الجوية وتحديد مواقع الآبار والجسات")
     
-    # 1. إضافة أدوات البحث اليدوي بالإحداثيات فوق الخريطة مباشرة
-    st.write("🔍 **البحث المباشر عن موقع بالإحداثيات:**")
-    search_col1, search_col2, search_col3 = st.columns([3, 3, 2])
-    
-    with search_col1:
-        search_lat = st.number_input("أدخل خط العرض (Latitude):", value=15.3694, format="%.6f")
-    with search_col2:
-        search_lon = st.number_input("أدخل خط الطول (Longitude):", value=44.1910, format="%.6f")
-    with search_col3:
-        zoom_level = st.slider("مستوى التقريب (Zoom):", min_value=1, max_value=20, value=13)
-
     # خيار رفع ملف الإحداثيات من القائمة الجانبية
     uploaded_file = st.sidebar.file_uploader("ارفع ملف الإحداثيات (CSV/Excel)", type=["csv", "xlsx"])
     
-    # استدعاء سيرفر خرائط جوجل للصور الجوية عالية الدقة (Google Satellite)
-    google_satellite_url = 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
+    st.write("🔍 **البحث والتحول المباشر إلى الموقع:**")
+    col1, col2, col3 = st.columns([3, 3, 2])
     
-    # بناء الخريطة بناءً على الإحداثيات المبحوث عنها أعلاه
-    m = folium.Map(
-        location=[search_lat, search_lon], 
-        zoom_start=zoom_level, 
-        tiles=google_satellite_url, 
-        attr='Google Satellite'
-    )
-    
-    # إضافة طبقة الهجين (أسماء الشوارع والمعالم فوق الصور الجوية)
-    folium.TileLayer(
-        tiles='https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-        attr='Google Hybrid',
-        name='Google Hybrid (خرائط هجين)',
-        overlay=False,
-        control=True
-    ).add_to(m)
-    
-    # إضافة زر البحث بالأسماء والمدن (عدسة مكبرة داخل الخريطة)
-    Geocoder(placeholder="ابحث عن مدينة أو منطقة...").add_to(m)
-    
-    # إضافة علامة متحركة عند الإحداثيات المبحوث عنها يدوياً
-    folium.Marker(
-        location=[search_lat, search_lon],
-        popup=f"الموقع الحالي المبحوث عنه:<br>Lat: {search_lat}<br>Lon: {search_lon}",
-        icon=folium.Icon(color="blue", icon="search")
-    ).add_to(m)
-    
-    folium.LayerControl().add_to(m)
+    with col1:
+        search_lat = col1.number_input("أدخل خط العرض (Latitude):", value=16.270000, format="%.6f")
+    with search_col2 if 'search_col2' in locals() else col2:
+        search_lon = col2.number_input("أدخل خط الطول (Longitude):", value=43.740000, format="%.6f")
+    with col3:
+        zoom_level = col3.slider("مستوى التقريب (Zoom):", min_value=1, max_value=20, value=12)
 
-    # معالجة ملف الإحداثيات المرفوع وإسقاط النقاط تلقائياً
+    # تجهيز مصفوفة البيانات الأساسية للنقطة المبحوث عنها لإنشاء أيقونة البحث
+    data = {'Lat': [search_lat], 'Lon': [search_lon], 'الموقع': ['📍 الهدف المراد فحص صورته الجوية']}
+    df_search = pd.DataFrame(data)
+
+    # معالجة ملف الإحداثيات المرفوع إن وجد لدمجه على الصورة الجوية
     if uploaded_file is not None:
         try:
             if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
+                df_user = pd.read_csv(uploaded_file)
             else:
-                df = pd.read_excel(uploaded_file)
-                
-            st.success("✅ تم تحميل ملف الإحداثيات بنجاح جاري إسقاط النقاط...")
+                df_user = pd.read_excel(uploaded_file)
+            st.success("✅ تم دمج نقاط ملف الإحداثيات الحقلية بنجاح!")
             
-            lat_col = [col for col in df.columns if 'lat' in col.lower() or 'عرض' in col][0]
-            lon_col = [col for col in df.columns if 'lon' in col.lower() or 'طول' in col][0]
-            name_col = [col for col in df.columns if 'name' in col.lower() or 'اسم' in col or 'id' in col.lower()][0]
+            # توحيد أسماء الأعمدة لتلائم الخريطة
+            lat_col = [col for col in df_user.columns if 'lat' in col.lower() or 'عرض' in col][0]
+            lon_col = [col for col in df_user.columns if 'lon' in col.lower() or 'طول' in col][0]
+            name_col = [col for col in df_user.columns if 'name' in col.lower() or 'اسم' in col or 'id' in col.lower()][0]
             
-            for index, row in df.iterrows():
-                folium.Marker(
-                    location=[row[lat_col], row[lon_col]],
-                    popup=f"📍 {row[name_col]}<br>Lat: {row[lat_col]}<br>Lon: {row[lon_col]}",
-                    icon=folium.Icon(color="red", icon="info-sign")
-                ).add_to(m)
-                
-            m.location = [df[lat_col].iloc[0], df[lon_col].iloc[0]]
+            df_user = df_user.rename(columns={lat_col: 'Lat', lon_col: 'Lon', name_col: 'الموقع'})
+            df_search = pd.concat([df_search, df_user], ignore_index=True)
             
+            # الانتقال التلقائي لأول نقطة في ملف المستخدم
+            search_lat = df_user['Lat'].iloc[0]
+            search_lon = df_user['Lon'].iloc[0]
         except Exception as e:
-            st.error(f"⚠️ يرجى التأكد من مطابقة أسماء أعمدة الإحداثيات في الملف.")
+            st.error("⚠️ يرجى التأكد من مطابقة أسماء أعمدة الإحداثيات.")
 
-    # عرض الخريطة التفاعلية في التطبيق
-    st.write("👇 **الصور الجوية التفاعلية لجوجل مابس:**")
-    map_data = st_folium(m, width=850, height=500, key="hydro_map")
+    # 🗺️ بناء خريطة الصور الجوية الفضائية التفاعلية بالكامل باستخدام Plotly Mapbox المجاني
+    fig = px.scatter_mapbox(
+        df_search, 
+        lat="Lat", 
+        lon="Lon", 
+        hover_name="الموقع",
+        color_discrete_sequence=["red"], 
+        zoom=zoom_level, 
+        height=550
+    )
     
-    # التقاط وتفاعل الإحداثيات عند النقر على الخريطة
-    if map_data and map_data.get("last_clicked"):
-        clicked_lat = map_data["last_clicked"]["lat"]
-        clicked_lng = map_data["last_clicked"]["lng"]
-        
-        st.info(f"📍 **النقطة التي نقرت عليها بالإصبع حالياً:**")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.text_input("خط العرض المستخرج:", value=f"{clicked_lat}")
-        with col2:
-            st.text_input("خط الطول المستخرج:", value=f"{clicked_lng}")
+    # اختيار وضع خريطة القمر الصناعي المفتوحة بدون مفتاح خاص
+    fig.update_layout(
+        mapbox_style="white-bg",
+        mapbox_layers=[{
+            "below": 'traces',
+            "sourcetype": "raster",
+            "source": [
+                "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}"
+            ]
+        }],
+        margin={"r":0,"t":0,"l":0,"b":0},
+        mapbox_center={"lat": search_lat, "lon": search_lon}
+    )
+    
+    st.write("👇 **الصور الجوية الفضائية المحدثة (تتحرك وتنتقل للهدف فوراً):**")
+    st.plotly_chart(fig, use_container_width=True)
 
 elif task == "📊 التحليل الهيدروجيولوجي (المهام السابقة)":
     st.subheader("📊 أدوات التحليل ومعالجة البيانات الحقلية")
-    st.write("هنا يتم تفعيل كافة الحسابات السابقة.")
-    
-    data_file = st.file_uploader("ارفع ملف البيانات الحقلية للتحليل", type=["csv", "txt"])
-    if data_file is not None:
-        st.success("تم استقبال ملف البيانات.")
+    st.write("هنا يتم تفعيل كافة الحسابات السابقة للـ Numpy والمصفوفات والرسومات البيانية.")
