@@ -4,4 +4,4 @@ pillow
 matplotlib
 folium
 streamlit-folium
-
+pydeck
