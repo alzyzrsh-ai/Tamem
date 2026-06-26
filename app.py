@@ -3,108 +3,123 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-# إعداد الصفحة وتصميم الواجهة العربية
-st.set_page_config(page_title="النظام الجيوفيزيائي المتكامل", layout="wide")
+# إعداد الصفحة والواجهة العربية
+st.set_page_config(page_title="نظام المعالجة الرقمية والاستكشاف", layout="wide")
 
 st.markdown("""
 <style>
     .main { text-align: right; direction: rtl; }
     h1, h2, h3 { color: #007bff; }
     body { background-color: #ffffff; }
+    .stButton>button { width: 100%; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🌍 نظام الاستكشاف الهيدروجيولوجي الذكي ومعالجة البيانات")
+st.title("🛰️ نظام استكشاف الآبار والمعالجة الرقمية للمستشعرات (Sentinel-Style)")
 st.write("---")
 
-# القائمة الجانبية للتحكم بالمهام
-st.sidebar.header("🛠️ أدوات التحكم")
-task = st.sidebar.selectbox("اختر المهمة المطلوبة:", [
-    "🛰️ الاستكشاف والربط مع AlpineQuest", 
-    "📊 برنامجنا الرائع (معالجة واستقطاع البيانات الجيوفيزيائية)"
+# القائمة الجانبية للتحكم بمسار الأفكار
+st.sidebar.header("⚙️ مسار العمل التسلسلي")
+step = st.sidebar.radio("اختر خطوة العمل الحالية:", [
+    "1️⃣ الاستكشاف والربط الحركي",
+    "2️⃣ استقطاع منطقة الدراسة",
+    "3️⃣ المعالجة الرقمية الفضائية (Sentinel Analysis)"
 ])
 
-# نظام الذاكرة المؤقتة لنقل المنطقة المستقطعة بين الصفحات
-if 'cropped_area' not in st.session_state:
-    st.session_state['cropped_area'] = None
+# نظام الذاكرة المؤقتة لحفظ البيانات بين الخطوات
+if 'target_coords' not in st.session_state:
+    st.session_state['target_coords'] = {'lat': 16.270000, 'lon': 43.740000}
+if 'cropped_bounds' not in st.session_state:
+    st.session_state['cropped_bounds'] = None
 
-if task == "🛰️ الاستكشاف والربط مع AlpineQuest":
-    st.subheader("🛰️ تحديد الإحداثيات والربط الميداني")
+# ==================== الخطوة الأولى ====================
+if step == "1️⃣ الاستكشاف والربط الحركي":
+    st.subheader("📍 الخطوة الأولى: تحديد الهدف والربط مع خرائط جوجل")
+    st.write("أدخل إحداثيات البئر أو الجسة المستهدفة ثم استخدم أزرار القفز السريع لفتحها ميدانياً:")
     
     col1, col2 = st.columns(2)
     with col1:
-        search_lat = st.number_input("خط العرض المركزي (Latitude):", value=16.270000, format="%.6f")
+        lat = st.number_input("خط العرض (Latitude):", value=st.session_state['target_coords']['lat'], format="%.6f")
     with col2:
-        search_lon = st.number_input("خط الطول المركزي (Longitude):", value=43.740000, format="%.6f")
+        lon = st.number_input("خط الطول (Longitude):", value=st.session_state['target_coords']['lon'], format="%.6f")
     
-    alpine_link = f"geo:{search_lat},{search_lon}?q={search_lat},{search_lon}(الهدف)"
-    st.markdown(f'<a href="{alpine_link}"><button style="width:100%; background-color:#d9534f; color:white; font-size:16px; font-weight:bold; padding:10px; border:none; border-radius:8px; cursor:pointer;">🗺️ فتح الموقع الميداني في AlpineQuest</button></a>', unsafe_allow_html=True)
+    # حفظ الإحداثيات المحدثة
+    st.session_state['target_coords'] = {'lat': lat, 'lon': lon}
     
-    st.write("---")
-    # ✂️ أداة استقطاع حدود المنطقة الحقلية (Bounding Box)
-    st.subheader("✂️ أداة استقطاع منطقة الدراسة (Geographic Cropping)")
-    st.write("حدد أبعاد المربع الحركي لاستقطاع المنطقة المحيطة بالبئر وإرسالها لبرنامج المعالجة:")
+    # روابط القفز السريع للتطبيقات لمنع الحجب داخل المتصفح
+    google_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+    alpine_link = f"geo:{lat},{lon}?q={lat},{lon}(بئر_الاستكشاف)"
     
-    crop_col1, crop_col2 = st.columns(2)
-    with crop_col1:
-        lat_buffer = st.slider("نطاق الاستقطاع الرأسي (Latitude Span Delta):", 0.001, 0.050, 0.010, format="%.3f")
-    with crop_col2:
-        lon_buffer = st.slider("نطاق الاستقطاع الأفقي (Longitude Span Delta):", 0.001, 0.050, 0.010, format="%.3f")
-    
-    # حساب أبعاد المربع المستقطع
-    min_lat, max_lat = search_lat - lat_buffer, search_lat + lat_buffer
-    min_lon, max_lon = search_lon - lon_buffer, search_lon + lon_buffer
-    
-    st.info(f"📐 حدود المنطقة المستقطعة حالياً:\n* خط العرض: من {min_lat:.4f} إلى {max_lat:.4f}\n* خط الطول: من {min_lon:.4f} إلى {max_lon:.4f}")
-    
-    if st.button("🚀 اعتماد استقطاع هذه المنطقة وإرسالها للمعالجة"):
-        st.session_state['cropped_area'] = {
-            'center': (search_lat, search_lon),
-            'bounds': (min_lat, max_lat, min_lon, max_lon),
-            'grid_size': 50 # شبكة مصفوفة المعالجة
-        }
-        st.success("🎯 تم حفظ واستقطاع المنطقة بنجاح! انتقل الآن إلى سهم (برنامجنا الرائع) من القائمة الجانبية لبدء المعالجة.")
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        st.markdown(f'<a href="{google_link}" target="_blank"><button style="width:100%; background-color:#007bff; color:white; padding:12px; border:none; border-radius:8px; cursor:pointer;">🚀 افتح الموقع في خرائط جوجل</button></a>', unsafe_allow_html=True)
+    with btn_col2:
+        st.markdown(f'<a href="{alpine_link}"><button style="width:100%; background-color:#d9534f; color:white; padding:12px; border:none; border-radius:8px; cursor:pointer;">🗺️ افتح الموقع في AlpineQuest</button></a>', unsafe_allow_html=True)
 
-elif task == "📊 برنامجنا الرائع (معالجة واستقطاع البيانات الجيوفيزيائية)":
-    st.subheader("📊 لوحة المعالجة الرياضية والرسومية للمنطقة المستقطعة")
+# ==================== الخطوة الثانية ====================
+elif step == "2️⃣ استقطاع منطقة الدراسة":
+    st.subheader("✂️ الخطوة الثانية: استقطاع وتحديد مربع نافذة الدراسة")
+    st.info(f"📍 الموقع المركزي المعتمد: {st.session_state['target_coords']['lat']}, {st.session_state['target_coords']['lon']}")
     
-    if st.session_state['cropped_area'] is None:
-        st.warning("⚠️ لم تقم باستقطاع أي منطقة بعد. يرجى الذهاب أولاً لقسم الاستكشاف وتحديد المنطقة المستهدفة.")
+    st.write("حدد المسافة الجغرافية (بالدرجات) التي تود قصها واستقطاعها حول المركز لإرسال مصفوفاتها للمعالجة:")
+    buffer_size = st.slider("نطاق مربع القص (Buffer Span Size):", 0.005, 0.050, 0.015, format="%.3f")
+    
+    c_lat = st.session_state['target_coords']['lat']
+    c_lon = st.session_state['target_coords']['lon']
+    
+    min_lat, max_lat = c_lat - buffer_size, c_lat + buffer_size
+    min_lon, max_lon = c_lon - buffer_size, c_lon + buffer_size
+    
+    st.write(f"📐 **أبعاد نافذة القص الحالية:**")
+    st.code(f"Lat Range: [{min_lat:.4f} to {max_lat:.4f}] \nLon Range: [{min_lon:.4f} to {max_lon:.4f}]")
+    
+    if st.button("💾 حفظ واعتماد استقطاع هذه المنطقة"):
+        st.session_state['cropped_bounds'] = (min_lat, max_lat, min_lon, max_lon)
+        st.success("🎯 تم استقطاع المنطقة وتجهيز مصفوفات الصورة الجوية رقمياً! انتقل الآن للخطوة الثالثة من القائمة الجانبية.")
+
+# ==================== الخطوة الثالثة ====================
+elif step == "3️⃣ المعالجة الرقمية الفضائية (Sentinel Analysis)":
+    st.subheader("🛰️ الخطوة الثالثة: برنامج المعالجة الرقمية ومحاكاة المستشعرات (Sentinel 1 & 2)")
+    
+    if st.session_state['cropped_bounds'] is None:
+        st.warning("⚠️ يرجى الذهاب للخطوة الثانية أولاً والضغط على زر اعتماد وحفظ الاستقطاع.")
     else:
-        area = st.session_state['cropped_area']
-        st.success(f"✅ تم تحميل بيانات الاستقطاع الجغرافي للمركز: {area['center']}")
+        min_lat, max_lat, min_lon, max_lon = st.session_state['cropped_bounds']
         
-        # محاكاة توليد مصفوفة تضاريس أو مقاومية كهربائية (Resistivity/Elevation) للمنطقة المستقطعة باستخدام Numpy
-        st.write("⚙️ **جاري تحويل الإحداثيات الجغرافية المستقطعة إلى مصفوفة رقمية ثنائية الأبعاد...**")
+        st.write("⚙️ **اختر نوع المعالجة الرقمية الفضائية المراد تطبيقها على خريطة المنطقة المستقطعة:**")
+        analysis_type = st.selectbox("نوع المعالجة الرقمية (Processing Type):", [
+            "🟢 معالجة Sentinel-2: المؤشرات البصرية والطبوغرافية (NDVI / Geological Index)",
+            "🔵 معالجة Sentinel-1: رادار النفاذية والتشققات الأرضية (SAR Lineaments & Roughness)"
+        ])
         
-        min_lat, max_lat, min_lon, max_lon = area['bounds']
-        x = np.linspace(min_lon, max_lon, area['grid_size'])
-        y = np.linspace(min_lat, max_lat, area['grid_size'])
+        # توليد شبكة رقمية للمنطقة المقصوصة باستخدام Numpy
+        x = np.linspace(min_lon, max_lon, 100)
+        y = np.linspace(min_lat, max_lat, 100)
         X, Y = np.meshgrid(x, y)
         
-        # معادلة رياضية جيوفيزيائية تحاكي تغير الشذوذ أو المقاومية تحت السطحية في المربع المستقطع
-        Z = np.sin(X*100) * np.cos(Y*100) * 50 + 100 
+        fig, ax = plt.subplots(figsize=(9, 5.5))
         
-        # رسم الخريطة الكنتورية والمجسمة للمنطقة المستقطعة بـ Matplotlib
-        st.write("📈 **التحليل الكنتوري الرقمي ثنائي الأبعاد للمنطقة المستقطعة:**")
-        fig, ax = plt.subplots(figsize=(8, 5))
-        contour = ax.contourf(X, Y, Z, cmap='terrain', levels=20)
-        fig.colorbar(contour, ax=ax, label="الارتفاع الرقمي / المقاومية النوعية (Ohm.m)")
-        ax.set_title("Digital Terrain & Geological Analysis of Cropped Area")
+        if "Sentinel-2" in analysis_type:
+            st.info("📊 تحاكي هذه المعالجة دمج النطاقات البصرية والأشعة تحت الحمراء القريبة (NIR) للكشف عن شواهد الرطوبة السطحية.")
+            # مصفوفة تحاكي البصري
+            Z_optical = np.sin(X*120) * np.cos(Y*120) * 30 + np.sin(X*50)*20 + 50
+            contour = ax.contourf(X, Y, Z_optical, cmap='gist_earth', levels=15)
+            fig.colorbar(contour, ax=ax, label="مؤشر الانعكاس الطيفي للصخور والتربة")
+            ax.set_title("Sentinel-2 Simulated Optical & Moisture Processing")
+            
+        else:
+            st.info("📡 تحاكي هذه المعالجة بيانات الرادار (SAR) ذات الاستقطاب الثنائي (VV/VH) لتوضيح الخشونة السطحية ومجاري الوديان الجافة.")
+            # مصفوفة تحاكي خشونة الرادار وتفسير الصدوع
+            Z_radar = (np.sin(X*200) * np.cos(Y*200))**2 * 80 + np.cos(X*30)*15
+            contour = ax.contourf(X, Y, Z_radar, cmap='inferno', levels=15)
+            fig.colorbar(contour, ax=ax, label="شدة الارتداد الراداري الخلفي (Backscatter Intensity dB)")
+            ax.set_title("Sentinel-1 Simulated SAR Radar Lineament Processing")
+
+        # إسقاط نقطة البئر المركزي داخل المعالجة
+        ax.plot(st.session_state['target_coords']['lon'], st.session_state['target_coords']['lat'], 'ro', markersize=8, label="📍 موقع البئر المستهدف")
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
-        
-        # وضع علامة البئر في المركز
-        ax.plot(area['center'][1], area['center'][0], 'ro', label="📍 بئر الاستكشاف")
         ax.legend()
         
         st.pyplot(fig)
-        
-        # عرض البيانات كجدول رقمي جاهز للتصدير
-        st.write("📂 **البيانات الرقمية المستقطعة والمستعدة للتحليل الهيدرولوجي:**")
-        df_cropped = pd.DataFrame({
-            'خط الطول (X)': X.flatten(),
-            'خط العرض (Y)': Y.flatten(),
-            'القيم المحسوبة (Z)': Z.flatten()
-        })
-        st.dataframe(df_cropped.head(100))
+        st.success("✅ تمت المعالجة الرقمية للمصفوفات الجغرافية المستقطعة بنجاح!")
