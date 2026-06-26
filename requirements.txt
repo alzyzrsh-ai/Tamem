@@ -2,3 +2,5 @@ streamlit
 numpy
 pillow
 matplotlib
+folium
+streamlit-folium
