@@ -5,8 +5,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
+from folium.plugins import Geocoder
 
-# إعداد الصفحة وتصميم الواجهة العربية المخصصة
+# إعداد ; } وتصميم الواجهة العربية المخصصة
 st.set_page_config(page_title="النظام الجيوفيزيائي", layout="wide")
 
 st.markdown("""
@@ -29,31 +30,49 @@ task = st.sidebar.selectbox("اختر المهمة المطلوبة:", [
 
 if task == "🛰️ الصور الجوية وإسقاط الإحداثيات":
     st.subheader("🛰️ مستكشف الصور الجوية وتحديد مواقع الآبار والجسات")
-    st.write("يمكنك إسقاط ملف إحداثيات جاهز أو النقر مباشرة على الخريطة لجلب بيانات الموقع فورياً.")
     
-    # خيار رفع ملف الإحداثيات
+    # 1. إضافة أدوات البحث اليدوي بالإحداثيات فوق الخريطة مباشرة
+    st.write("🔍 **البحث المباشر عن موقع بالإحداثيات:**")
+    search_col1, search_col2, search_col3 = st.columns([3, 3, 2])
+    
+    with search_col1:
+        search_lat = st.number_input("أدخل خط العرض (Latitude):", value=15.3694, format="%.6f")
+    with search_col2:
+        search_lon = st.number_input("أدخل خط الطول (Longitude):", value=44.1910, format="%.6f")
+    with search_col3:
+        zoom_level = st.slider("مستوى التقريب (Zoom):", min_value=1, max_value=20, value=13)
+
+    # خيار رفع ملف الإحداثيات من القائمة الجانبية
     uploaded_file = st.sidebar.file_uploader("ارفع ملف الإحداثيات (CSV/Excel)", type=["csv", "xlsx"])
     
-    # إحداثيات البداية الافتراضية
-    default_lat, default_lon = 15.3694, 44.1910 
-    
-    # استدعاء سيرفر خرائط جوجل للصور الجوية عالية الدقة
+    # استدعاء سيرفر خرائط جوجل للصور الجوية عالية الدقة (Google Satellite)
     google_satellite_url = 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
     
+    # بناء الخريطة بناءً على الإحداثيات المبحوث عنها أعلاه
     m = folium.Map(
-        location=[default_lat, default_lon], 
-        zoom_start=6, 
+        location=[search_lat, search_lon], 
+        zoom_start=zoom_level, 
         tiles=google_satellite_url, 
         attr='Google Satellite'
     )
     
-    # إضافة طبقة الهجين (أسماء الشوارع مع الصور الجوية)
+    # إضافة طبقة الهجين (أسماء الشوارع والمعالم فوق الصور الجوية)
     folium.TileLayer(
         tiles='https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
         attr='Google Hybrid',
-        name='صور جوية مع المعالم الجغرافية',
+        name='Google Hybrid (خرائط هجين)',
         overlay=False,
         control=True
+    ).add_to(m)
+    
+    # إضافة زر البحث بالأسماء والمدن (عدسة مكبرة داخل الخريطة)
+    Geocoder(placeholder="ابحث عن مدينة أو منطقة...").add_to(m)
+    
+    # إضافة علامة متحركة عند الإحداثيات المبحوث عنها يدوياً
+    folium.Marker(
+        location=[search_lat, search_lon],
+        popup=f"الموقع الحالي المبحوث عنه:<br>Lat: {search_lat}<br>Lon: {search_lon}",
+        icon=folium.Icon(color="blue", icon="search")
     ).add_to(m)
     
     folium.LayerControl().add_to(m)
@@ -80,32 +99,30 @@ if task == "🛰️ الصور الجوية وإسقاط الإحداثيات":
                 ).add_to(m)
                 
             m.location = [df[lat_col].iloc[0], df[lon_col].iloc[0]]
-            m.zoom_start = 12
             
         except Exception as e:
             st.error(f"⚠️ يرجى التأكد من مطابقة أسماء أعمدة الإحداثيات في الملف.")
 
     # عرض الخريطة التفاعلية في التطبيق
-    map_data = st_folium(m, width=850, height=500)
+    st.write("👇 **الصور الجوية التفاعلية لجوجل مابس:**")
+    map_data = st_folium(m, width=850, height=500, key="hydro_map")
     
-    # التقاط وتفاعل الإحداثيات عند النقر
+    # التقاط وتفاعل الإحداثيات عند النقر على الخريطة
     if map_data and map_data.get("last_clicked"):
         clicked_lat = map_data["last_clicked"]["lat"]
         clicked_lng = map_data["last_clicked"]["lng"]
         
-        st.info(f"📍 **النقطة التي قمت بتحديدها حالياً:**")
+        st.info(f"📍 **النقطة التي نقرت عليها بالإصبع حالياً:**")
         col1, col2 = st.columns(2)
         with col1:
-            st.text_input("خط العرض (Latitude):", value=f"{clicked_lat}")
+            st.text_input("خط العرض المستخرج:", value=f"{clicked_lat}")
         with col2:
-            st.text_input("خط الطول (Longitude):", value=f"{clicked_lng}")
+            st.text_input("خط الطول المستخرج:", value=f"{clicked_lng}")
 
 elif task == "📊 التحليل الهيدروجيولوجي (المهام السابقة)":
     st.subheader("📊 أدوات التحليل ومعالجة البيانات الحقلية")
-    st.write("هنا يتم تفعيل كافة الحسابات السابقة (مثل معالجة البيانات الحقلية، الرسوم البيانية لـ Matplotlib، وتحليل الآبار).")
+    st.write("هنا يتم تفعيل كافة الحسابات السابقة.")
     
-    # أداة رفع البيانات السابقة ومعالجتها بمصفوفات numpy ورسمها
     data_file = st.file_uploader("ارفع ملف البيانات الحقلية للتحليل", type=["csv", "txt"])
     if data_file is not None:
-        st.success("تم استقبال ملف البيانات، يمكنك تطبيق المصفوفات والرسومات البيانية هنا.")
-        # هنا تكتمل العمليات الرياضية السابقة بناء على هيكلة ملفاتك
+        st.success("تم استقبال ملف البيانات.")
