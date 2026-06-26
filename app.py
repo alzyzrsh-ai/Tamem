@@ -169,4 +169,56 @@ elif step == "4️⃣ الفرز البنيوي ونقد طبقات وفوالق
         classifications = []
         for r_val, m_val in zip(S1_flat, S2_flat):
             if r_val > 0.35 and m_val > 0.45:
-                classifications.append("🚨 نطاق تصدع /
+                classifications.append("🚨 نطاق تصدع / فالق نشط (Fracture Zone)")
+            elif r_val > 0.35 and m_val <= 0.45:
+                classifications.append("⛰️ صخور صلبة بارزة / مكاشف (Solid/Hard Rock)")
+            elif r_val <= 0.15 and m_val > 0.55:
+                classifications.append("🌱 رسوبيات وديان ناعمة / طمي (Alluvial/Sediments)")
+            elif 0.15 < r_val <= 0.35 and m_val > 0.40:
+                classifications.append("🧱 طبقات متوسطة التماسك (Medium Compact)")
+            else:
+                classifications.append("📉 طبقات هشّة / ضعيفة التماسك (Weak/Loose Layer)")
+                
+        # 📂 بناء الجدول الهندسي الشامل للتصدعات والطبقات
+        df_structural = pd.DataFrame({
+            'خط الطول (X)': X_flat,
+            'خط العرض (Y)': Y_flat,
+            'عامل الرادار (Sentinel-1)': S1_flat,
+            'عامل الرطوبة (Sentinel-2)': S2_flat,
+            'التصنيف البنيوي للطبقة': classifications
+        })
+        
+        # عرض إحصائيات سريعة لتوزيع النطاقات في الموقع
+        st.write("📈 **التوزيع الإحصائي لنطاقات الموقع الجيولوجية البنيوية:**")
+        distribution = df_structural['التصنيف البنيوي للطبقة'].value_counts()
+        st.bar_chart(distribution)
+        
+        # عرض البيانات المجدولة مع فلتر لتسهيل الرسم التحت سطحي
+        st.write("📂 **جدول تصنيف النقاط والبكسلات (جاهز لبرامج الرسم والتثاقل الكنتوري):**")
+        filter_zone = st.selectbox("تصفية الجدول حسب النطاق البنيوي المستهدف للرسم:", ["كل النطاقات"] + list(df_structural['التصنيف البنيوي للطبقة'].unique()))
+        
+        if filter_zone == "كل النطاقات":
+            st.dataframe(df_structural.head(200))
+            csv_export = df_structural.to_csv(index=False).encode('utf-8')
+        else:
+            filtered_df = df_structural[df_structural['التصنيف البنيوي للطبقة'] == filter_zone]
+            st.dataframe(filtered_df)
+            csv_export = filtered_df.to_csv(index=False).encode('utf-8')
+            
+        st.download_button(f"📥 تصدير نقاط [{filter_zone}] كملف CSV للرسم الهندسي", csv_export, "Structural_Subsurface_Data.csv", "text/csv")
+        
+        st.write("---")
+        
+        # 📝 تقرير النقد والتحليل البنيوي لتوجيه الخرائط التحت سطحية
+        st.subheader("📝 تقرير النقد الجيوفيزيائي لتتبع الفوالق والترسبات الرسوبية")
+        
+        total_pts = len(df_structural)
+        fracture_pts = len(df_structural[df_structural['التصنيف البنيوي للطبقة'].str.contains("تصدع")])
+        sediment_pts = len(df_structural[df_structural['التصنيف البنيوي للطبقة'].str.contains("رسوبيات")])
+        
+        st.info(f"""
+        🔬 **التفسير البنيوي لبيانات المستشعرات الفوقية للموقع:**
+        * **رصد التصدعات والفوالق (Lineaments):** تم عزل ورسم **{fracture_pts} بكسل** تُظهر استجابة رادارية وطيفية مشتركة حادة الحواف. هذه النقاط تمثل امتداد المحور الحركي للفالق تحت السطحي في منطقة الدراسة، ويُنصح بوصل هذه النقاط بالخطوط الكنتورية لتحديد اتجاه ميل الفالق ($Dip/Strike$).
+        * **حوض الترسيب والرسوبيات (Alluvial Basin):** تشغل الرسوبيات الناعمة وطبقات الطمي مخرات السيول بنسبة **{((sediment_pts/total_pts)*100):.1f}%** من المساحة الإجمالية. هذه النطاقات تمثل أفضل مكامن التغذية الرأسية للمياه الجوفية ($Infiltration$).
+        * **الصلابة الميكانيكية للطبقات:** يتوزع الموقع مابين صخور صلبة مكشوفة تعطي أعلى ارتداد راداري ومناطق ضعيفة التماسك (طبقات هشّة). التغير المفاجئ في الجدول بين النطاق (الصلب) والنطاق (الضعيف) هو المؤشر القطعي على وجود **رمية الفالق (Fault Displacement)** التي تبحث عنها لرسم قطاعك الجيولوجي التحت سطحي.
+        """)
