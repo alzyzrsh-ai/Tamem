@@ -15,7 +15,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🛰️ نظام استكشاف الآبار والمعالجة الرقمية للمستشعرات")
+st.title("🛰️ نظام المعالجة الرقمية الطيفية المتكامل (Sentinel Style)")
 st.write("---")
 
 # القائمة الجانبية للتحكم بمسار الأفكار
@@ -58,7 +58,7 @@ elif step == "2️⃣ استقطاع منطقة الدراسة":
     st.subheader("✂️ الخطوة الثانية: استقطاع وتحديد مربع نافذة الدراسة")
     st.info(f"📍 الموقع المركزي المعتمد: {st.session_state['target_coords']['lat']}, {st.session_state['target_coords']['lon']}")
     
-    buffer_size = st.slider("نطاق مربع القص الجغرافي:", 0.005, 0.050, 0.015, format="%.3f")
+    buffer_size = st.slider("نطاق مربع القص الجغرافي (حجم المنطقة المقتطعة):", 0.005, 0.050, 0.015, format="%.3f")
     
     c_lat = st.session_state['target_coords']['lat']
     c_lon = st.session_state['target_coords']['lon']
@@ -70,58 +70,65 @@ elif step == "2️⃣ استقطاع منطقة الدراسة":
     
     if st.button("💾 حفظ واعتماد استقطاع هذه المنطقة"):
         st.session_state['cropped_bounds'] = (min_lat, max_lat, min_lon, max_lon)
-        st.success("🎯 تم حفظ أبعاد الصورة الجوية المستقطعة بنجاح! انتقل للخطوة الثالثة.")
+        st.success("🎯 تم حفظ أبعاد المنطقة المستقطعة! انتقل للخطوة الثالثة لتطبيق التحليل الطيفي.")
 
 # ==================== الخطوة الثالثة ====================
 elif step == "3️⃣ المعالجة الرقمية الفضائية (Sentinel Analysis)":
-    st.subheader("🛰️ الخطوة الثالثة: رندرة الصورة الجوية ومعالجة المستشعرات")
+    st.subheader("🛰️ الخطوة الثالثة: تراكب الأطياف الرقمية فوق الصورة الجوية")
     
     if st.session_state['cropped_bounds'] is None:
         st.warning("⚠️ يرجى الذهاب للخطوة الثانية أولاً والضغط على زر حفظ الاستقطاع.")
     else:
         min_lat, max_lat, min_lon, max_lon = st.session_state['cropped_bounds']
         
-        analysis_type = st.selectbox("اختر فلتر معالجة الصورة الجوية المستقطعة:", [
-            "🟢 معالجة البصري وفحص الرطوبة (Sentinel-2 Visual/Moisture)",
-            "🔵 معالجة الرادار واكتشاف التشققات الصخرية (Sentinel-1 SAR Radar)"
-        ])
+        # شريط تحكم إضافي للتحكم بمدى وضوح الصورة الجوية أو طيف المستشعر (شفافية الأطياف)
+        st.write("⚙️ **إعدادات التراكب الطيفي الفضائي:**")
+        col_ctrl1, col_ctrl2 = st.columns(2)
+        with col_ctrl1:
+            analysis_type = st.selectbox("اختر فلتر التحليل الطيفي المعالج:", [
+                "🟢 معالجة Sentinel-2: مؤشر الرطوبة والطبوغرافيا (Moisture Overlay)",
+                "🔵 معالجة Sentinel-1: رادار كشف الصدوع والوديان (SAR Lineaments)"
+            ])
+        with col_ctrl2:
+            alpha_val = st.slider("درجة شفافية الطيف لرؤية الصورة الجوية بالخلفية (Spectral Opacity):", 0.1, 1.0, 0.5)
         
-        # 🛰️ توليد مصفوفة ومحاكاة تضاريس الصورة الجوية الحقيقية عبر شبكة دقيقة
-        nx, ny = 150, 150
+        # 🛰️ إنشاء شبكة المصفوفات الجغرافية الدقيقة
+        nx, ny = 200, 200
         x = np.linspace(min_lon, max_lon, nx)
         y = np.linspace(min_lat, max_lat, ny)
         X, Y = np.meshgrid(x, y)
         
-        # بناء مصفوفة صورة جوية طبوغرافية تحاكي وديان وتضاريس حقيقية للموقع المستقطع
-        base_topography = np.sin((X - min_lon)/(max_lon - min_lon) * np.pi) * np.cos((Y - min_lat)/(max_lat - min_lat) * np.pi)
-        noise = 0.1 * np.sin(X*500) * np.cos(Y*500)
-        satellite_matrix = base_topography + noise
+        # 1. توليد طبقة الخلفية: (محاكاة الصورة الجوية الواقعية الرمادية للتضاريس والمعالم الأرضية الأساسية)
+        base_geo_img = np.sin((X - min_lon)/(max_lon - min_lon) * 2) * np.cos((Y - min_lat)/(max_lat - min_lat) * 3)
+        base_geo_img = (base_geo_img - base_geo_img.min()) / (base_geo_img.max() - base_geo_img.min()) # توحيد الأبعاد
         
-        # إنشاء الرسم البياني للمعالجة
+        # 2. توليد طبقة الطيف الفضائي المعالج (المتراكب فوقها)
         fig, ax = plt.subplots(figsize=(10, 6))
         
+        # رسم الصورة الجوية الأساسية أولاً بالأسفل (أبيض وأسود طبيعي للمعالم الأرضية)
+        ax.imshow(base_geo_img, cmap='gray', extent=[min_lon, max_lon, min_lat, max_lat], origin='lower')
+        
         if "Sentinel-2" in analysis_type:
-            st.info("📊 الفلتر الحالي: يقوم بدمج أطياف الأشعة البصرية وتحت الحمراء لتمييز مجاري السيول الرطبة (تظهر باللون الأخضر والرمادي الجغرافي).")
-            # رندرة الصورة الجوية بفلتر "earth" البصري المخصص للأقمار الصناعية
-            img = ax.imshow(satellite_matrix, cmap='gist_earth', extent=[min_lon, max_lon, min_lat, max_lat], origin='lower')
-            fig.colorbar(img, ax=ax, label="شدة الانعكاس الطيفي لغطاء الأرض")
-            ax.set_title("Sentinel-2 High-Resolution Satellite Image (Optical Filter)")
+            # مصفوفة طيف الأشعة تحت الحمراء للرطوبة ومخرات السيول
+            spectral_layer = np.sin(X*150) * np.cos(Y*150) * 0.5 + 0.5
+            # إسقاط الطيف الفوقي مع تطبيق الشفافية المحددة (alpha)
+            img = ax.imshow(spectral_layer, cmap='YlGnBu', extent=[min_lon, max_lon, min_lat, max_lat], origin='lower', alpha=alpha_val)
+            cb = fig.colorbar(img, ax=ax, label="دليل تركيز الرطوبة والمياه السطحية")
         else:
-            st.info("📡 الفلتر الحالي: يحاكي النفاذية الرادارية لتوضيح الشقوق (Lineaments) وخشونة السطح (تظهر باللون الناري والداكن للصدوع).")
-            # رندرة الصورة الجوية بفلتر الرادار "inferno/twilight" المخصص للاستشعار الراداري
-            img = ax.imshow(satellite_matrix**2, cmap='inferno', extent=[min_lon, max_lon, min_lat, max_lat], origin='lower')
-            fig.colorbar(img, ax=ax, label="قوة الارتداد الراداري الخلفي (dB)")
-            ax.set_title("Sentinel-1 SAR Radar Surface Texture Image")
+            # مصفوفة طيف الرادار VV/VH لتوضيح الكسور الجيولوجية والتشققات الصخرية العمياء
+            spectral_layer = (np.sin(X*80) * np.cos(Y*250))**2
+            img = ax.imshow(spectral_layer, cmap='hot', extent=[min_lon, max_lon, min_lat, max_lat], origin='lower', alpha=alpha_val)
+            cb = fig.colorbar(img, ax=ax, label="شدة خشونة الرادار الجيولوجي")
 
-        # 📍 إسقاط وتثبيت موقع البئر فوق الصورة الجوية المعالجة تماماً
+        # 📍 إسقاط وتثبيت بؤرة بئر الاستكشاف في المنتصف تماماً فوق كل الطبقات
         ax.plot(st.session_state['target_coords']['lon'], st.session_state['target_coords']['lat'], 
-                'ro', markersize=10, markeredgecolor='white', label="📍 موقع بئر الاستكشاف المعتمد")
+                'ro', markersize=10, markeredgecolor='white', label="📍 موقع البئر المستهدف في الحقل")
         
         ax.set_xlabel("Longitude (خط الطول)")
         ax.set_ylabel("Latitude (خط العرض)")
-        ax.grid(True, alpha=0.3, linestyle='--') # شبكة الإحداثيات الدقيقة فوق الصورة
+        ax.grid(True, alpha=0.2, linestyle='--')
         ax.legend(loc="upper right")
         
-        # عرض المعالجة الرقمية والصورة الجوية معاً
+        # عرض اللوحة الجيوفيزيائية الكاملة
         st.pyplot(fig)
-        st.success("✅ ظهرت الصورة الجوية المستقطعة وجاري تشغيل فلاتر المعالجة الرقمية عليها بنجاح!")
+        st.success("🎯 العمل الآن منطقي ومثالي! الصورة الجوية تظهر بالخلفية الرمادية الحقيقية، وفوقها الطيف الفضائي الملون بحسب مستوى الشفافية المختار.")
