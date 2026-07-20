@@ -6,7 +6,10 @@ import urllib.request
 import struct
 import io
 import math
-
+import plotly.express as px
+import google.generativeai as genai
+from PIL import Image
+import json
 # إعداد واجهة البرنامج وتوسيع الشاشة لتناسب المهندسين
 st.set_page_config(page_title="منصة الاستشعار والفرز البنيوي والحراري المتكاملة", layout="wide")
 
