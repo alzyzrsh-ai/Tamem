@@ -388,7 +388,7 @@ elif "6️⃣" in step:
         })
 
     # ----------------------------------------------------
-    # ج) معالجة الصورة عبر الذكاء الاصطناعي مع الآلية المستقرة
+    # ج) معالجة الصورة عبر الذكاء الاصطناعي بأقوى خوارزمية فحص النماذج
     # ----------------------------------------------------
     if image_source is not None:
         st.sidebar.image(image_source, caption="الصورة المحددة", use_column_width=True)
@@ -408,18 +408,42 @@ elif "6️⃣" in step:
                         No markdown.
                         """
                         
-                        # المحاولة الأولى باستخدام النموذج الأحدث، والتراجع تلقائياً عند الحاجة
-                        try:
-                            model = genai.GenerativeModel('gemini-2.5-flash')
-                            res = model.generate_content([prompt, img])
-                        except Exception:
-                            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-                            res = model.generate_content([prompt, img])
+                        # قائمة بالنماذج المحتملة ببادئاتها الرسمية
+                        candidate_models = [
+                            'models/gemini-1.5-flash',
+                            'models/gemini-1.5-pro',
+                            'models/gemini-2.5-flash',
+                            'gemini-2.5-flash',
+                            'gemini-1.5-flash'
+                        ]
+                        
+                        res = None
+                        last_error = None
+                        
+                        # تجربة النماذج المتاحة بالتتابع
+                        for model_name in candidate_models:
+                            try:
+                                model = genai.GenerativeModel(model_name)
+                                res = model.generate_content([prompt, img])
+                                if res:
+                                    break
+                            except Exception as e:
+                                last_error = e
+                                continue
+                        
+                        # إذا فشلت جميع المحاولات فوق، تجربة الاستعلام التلقائي عن النماذج المتاحة
+                        if res is None:
+                            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                            if available_models:
+                                model = genai.GenerativeModel(available_models[0])
+                                res = model.generate_content([prompt, img])
+                            else:
+                                raise Exception(f"لم يتم العثور على أي نموذج مدعوم. الخطأ الأخير: {last_error}")
                             
                         clean_text = res.text.strip().replace("```json", "").replace("```", "")
-                        
                         st.session_state["ves_data"] = pd.DataFrame(json.loads(clean_text))
                         st.sidebar.success("تم استخراج البيانات بنجاح!")
+                        
                 except Exception as e:
                     st.sidebar.error(f"خطأ أثناء التحليل: {e}")
 
@@ -521,3 +545,5 @@ elif "6️⃣" in step:
                 fig.update_layout(xaxis_title="AB/2 (m)", yaxis_title="Apparent Resistivity (Ohm.m)", template="plotly_white")
                 
                 st.plotly_chart(fig, use_container_width=True)
+
+ 
