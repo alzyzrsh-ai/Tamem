@@ -8,3 +8,4 @@ pandas
 google-generativeai
 xlsxwriter
 plotly
+scipy
