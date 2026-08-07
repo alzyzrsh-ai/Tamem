@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import plotly.graph_objects as go
+from mpl_toolkits.mplot3d import Axes3D
 import json
 
 # إعداد واجهة الصفحة
@@ -64,8 +64,12 @@ if uploaded_file is not None:
     fit_deep = np.polyfit(k_centers[valid][:8], np.log(ps_binned[valid][:8]), 1)
     fit_shallow = np.polyfit(k_centers[valid][8:18], np.log(ps_binned[valid][8:18]), 1)
 
-    deep_depth = -fit_deep[0] / 2.0        # عمق الركيزة بالمتر
-    shallow_depth = -fit_shallow[0] / 2.0  # عمق الصدوع بالمتر
+    deep_depth = abs(-fit_deep[0] / 2.0)
+    shallow_depth = abs(-fit_shallow[0] / 2.0)
+
+    # ضبط مدى العمق ليناسب الواقع الجيولوجي بالمنطقة (بين -900 م و -1700 م)
+    gz_norm = (grid_gz - grid_gz.min()) / (grid_gz.max() - grid_gz.min() + 1e-9)
+    z_basement_3d = -1700.0 + (gz_norm * 800.0)
 
     # إنشاء تبويبات العرض الـ 4
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -148,42 +152,28 @@ if uploaded_file is not None:
         ax3.grid(True, linestyle='--', alpha=0.5)
         st.pyplot(fig3)
 
-    # --- Tab 4: النمذجة ثلاثية الأبعاد التفاعلية 3D ---
+    # --- Tab 4: النمذجة ثلاثية الأبعاد (طراز الصورة الأولى) ---
     with tab4:
-        st.subheader("النموذج الجيولوجي المجسم ثلاثي الأبعاد (3D Basement Surface)")
-        st.markdown("يمكنك تدوير المجسم والتحكم بالتضاريس والتكبير مباشرة عبر الشاشة.")
+        st.subheader("3D Subsurface Basement Density Boundary (Inversion Model)")
+        st.caption("نموذج حدود الكثافة لسطح الركيزة الصخرية ثلاثي الأبعاد")
 
-        # حساب تضاريس سطح الركيزة ثلاثي الأبعاد
-        z_basement_3d = -deep_depth + ((grid_gz - grid_gz.mean()) * 1800.0)
+        fig4 = plt.figure(figsize=(10, 7), dpi=250)
+        ax4 = fig4.add_subplot(111, projection='3d')
 
-        # بناء المجسم بواسطة Plotly مع استخدام نظام الألوان المعتمد Earth
-        fig_3d = go.Figure(data=[
-            go.Surface(
-                x=grid_lon,
-                y=grid_lat,
-                z=z_basement_3d,
-                colorscale='Earth',
-                showscale=True,
-                colorbar_title='عمق الركيزة (متر)',
-                lighting=dict(ambient=0.6, diffuse=0.8, specular=0.2, roughness=0.5),
-                contours_z=dict(show=True, usecolormap=True, highlightcolor="white", project_z=False)
-            )
-        ])
+        # رسم السطح المجسم بنظام الألوان terrain والأبعاد الدقيقة
+        surf = ax4.plot_surface(grid_lon, grid_lat, z_basement_3d, cmap='terrain', edgecolor='none', alpha=0.92)
 
-        fig_3d.update_layout(
-            title='3D Subsurface Basement Relief Model',
-            autosize=True,
-            scene=dict(
-                xaxis_title='خط الطول (Longitude °E)',
-                yaxis_title='خط العرض (Latitude °N)',
-                zaxis_title='Depth / Elevation (m)',
-                aspectmode='manual',
-                aspectratio=dict(x=1, y=1, z=0.7),
-                camera=dict(
-                    eye=dict(x=-1.6, y=-1.6, z=1.2)
-                )
-            ),
-            margin=dict(l=0, r=0, b=0, t=40)
-        )
+        ax4.set_title("3D Subsurface Basement Density Boundary (Inversion Model)", fontsize=11, fontweight='bold', pad=12)
+        ax4.set_xlabel("Longitude (°E)", fontsize=9, labelpad=8)
+        ax4.set_ylabel("Latitude (°N)", fontsize=9, labelpad=8)
+        ax4.set_zlabel("Depth / Elevation (m)", fontsize=9, labelpad=8)
 
-        st.plotly_chart(fig_3d, use_container_width=True)
+        # شريط دليل الألوان المائل المباشر
+        cbar = fig4.colorbar(surf, ax=ax4, shrink=0.6, aspect=14, pad=0.1)
+        cbar.set_label("Basement Surface Depth (m)", fontsize=9)
+
+        # ضبط زاوية الرؤية لتطابق الصورة تماماً
+        ax4.view_init(elev=28, azim=-65)
+        plt.tight_layout()
+
+        st.pyplot(fig4)
