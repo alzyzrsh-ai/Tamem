@@ -148,35 +148,45 @@ if uploaded_file is not None:
         ax3.grid(True, linestyle='--', alpha=0.5)
         st.pyplot(fig3)
 
-    # --- Tab 4: النمذجة ثلاثية الأبعاد التفاعلية 3D ---
+    # --- Tab 4: النمذجة ثلاثية الأبعاد 3D المتقدمة ---
     with tab4:
         st.subheader("النموذج الجيولوجي المجسم ثلاثي الأبعاد (3D Basement Surface)")
-        st.markdown("يمكنك **تدوير المجسم، التكبير/التصغير، والتفاعل** مع السطح مباشرة عبر الشاشة.")
+        st.markdown("يمكنك تدوير المجسم والتحكم بالتضاريس والتكبير مباشرة عبر الشاشة.")
 
-        # حساب تضاريس سطح الركيزة ثلاثي الأبعاد (3D Inversion Surface)
-        z_basement_3d = -deep_depth + ((grid_gz - grid_gz.mean()) * 1500.0)
+        # 1. حساب تضاريس سطح الركيزة
+        z_basement_3d = -deep_depth + ((grid_gz - grid_gz.mean()) * 1800.0)
 
-        # بناء المجسم بواسطة Plotly
+        # 2. بناء المجسم بخصائص التضاريس المرتفعة (Enhanced Terrain Aspect)
         fig_3d = go.Figure(data=[
             go.Surface(
                 x=grid_lon, 
                 y=grid_lat, 
                 z=z_basement_3d, 
-                colorscale='Earth', 
-                colorbar_title='عمق الركيزة (متر)'
+                colorscale='Gist_earth',  # تدرج الألوان التضاريسي المطابق
+                showscale=True,
+                colorbar_title='عمق الركيزة (متر)',
+                lighting=dict(ambient=0.6, diffuse=0.8, specular=0.2, roughness=0.5), # إضاءة وظلال تضاريسية
+                contours_z=dict(show=True, usecolormap=True, highlightcolor="white", project_z=False) # إظهار خطوط الكنتور التضاريسية
             )
         ])
 
+        # 3. ضبط نسبة المحاور لبروز الانخسافات والمرتفعات (Aspect Ratio)
         fig_3d.update_layout(
             title='3D Subsurface Basement Relief Model',
             autosize=True,
             scene=dict(
                 xaxis_title='خط الطول (Longitude °E)',
                 yaxis_title='خط العرض (Latitude °N)',
-                zaxis_title='العمق / الارتفاع (متر)',
-                camera=dict(eye=dict(x=1.4, y=1.4, z=1.1))
+                zaxis_title='Depth / Elevation (m)',
+                # التحكم في بروز محور Z ليظهر التضاريس بوضوح كالصورة تماماً
+                aspectmode='manual',
+                aspectratio=dict(x=1, y=1, z=0.7), 
+                camera=dict(
+                    eye=dict(x=-1.6, y=-1.6, z=1.2) # زاوية رؤية مشابهة للصورة المرفقة
+                )
             ),
             margin=dict(l=0, r=0, b=0, t=40)
         )
 
         st.plotly_chart(fig_3d, use_container_width=True)
+)
