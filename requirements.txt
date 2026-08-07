@@ -9,3 +9,4 @@ google-generativeai
 xlsxwriter
 plotly
 scipy
+opencv-python-headless
