@@ -10,3 +10,6 @@ xlsxwriter
 plotly
 scipy
 opencv-python-headless
+openpyxl
+
+
