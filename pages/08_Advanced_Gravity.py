@@ -169,7 +169,7 @@ if uploaded_file is not None:
                 z=z_basement_3d,
                 colorscale='Earth',
                 colorbar_title='Basement Depth (m)',
-                lighting=dict(ambient=0.5, diffuse=0.8, specular=0.3, roughness=0.4, freshne=0.2),
+                lighting=dict(ambient=0.5, diffuse=0.8, specular=0.3, roughness=0.4, fresnel=0.2),
                 contours_z=dict(show=True, usecolormap=True, highlightcolor="white", project_z=False)
             )
         ])
