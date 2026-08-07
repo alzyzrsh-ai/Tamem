@@ -9,7 +9,7 @@ import json
 st.set_page_config(page_title="معالج الجاذبية المتقدم والنمذجة 3D", page_icon="🌋", layout="wide")
 
 st.title("🌋 معالج بيانات الجاذبية والنمذجة ثلاثية الأبعاد (3D Gravity Inversion)")
-st.caption("وحدة المعالجة الجيوفيزيائية المتقدمة: المشتقات المكانية، الاستخراج الآلي للصدوع، المقطع 2D، والنموذج المجسم 3D")
+st.caption("وحدة المعالجة الجيوفيزيائية المتقدمة: المشتقات المكانية، الاستخراج الآلي للصدوع، المقطع 2D، النموذج المجسم 3D، وتفكيك أويلر")
 st.markdown("---")
 
 uploaded_file = st.file_uploader("قم برفع ملف البيانات الجيوفيزيائية (CSV أو XLSX)", type=['csv', 'xlsx'])
@@ -80,11 +80,13 @@ if uploaded_file is not None:
     gz_norm = (grid_gz - gz_min) / (gz_max - gz_min + 1e-9)
     z_basement_3d = -1700.0 + (gz_norm * 800.0)
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    # إضافة التبويبات الخمسة
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "1️⃣ الخرائط والتحليل الطيفي",
         "2️⃣ الصدوع وتصدير GIS",
         "3️⃣ المقطع الجيولوجي 2D",
-        "4️⃣ النمذجة المجسمة 3D (تفاعلي)"
+        "4️⃣ النمذجة المجسمة 3D",
+        "5️⃣ تفكيك أويلر 3D (Euler)"
     ])
 
     with tab1:
@@ -156,12 +158,11 @@ if uploaded_file is not None:
         ax3.grid(True, linestyle='--', alpha=0.5)
         st.pyplot(fig3)
 
-    # --- Tab 4: النمذجة المجسمة ثلاثية الأبعاد (قابلة للتدوير ومجسمة تضاريسياً) ---
+    # --- Tab 4: النمذجة المجسمة ثلاثية الأبعاد ---
     with tab4:
         st.subheader("3D Subsurface Basement Density Boundary (Inversion Model)")
         st.caption("🔄 يمكنك تدوير المجسم 360 درجة، التكبير/التصغير، وإمالة الزاوية مباشرة بلمس الشاشة")
 
-        # بناء النموذج التفاعلي عبر Plotly باستخدام ألوان Earth مع تضخيم راسي للتضاريس
         fig_3d = go.Figure(data=[
             go.Surface(
                 x=grid_x,
@@ -182,7 +183,7 @@ if uploaded_file is not None:
                 yaxis_title='Latitude (°N)',
                 zaxis_title='Depth / Elevation (m)',
                 aspectmode='manual',
-                aspectratio=dict(x=1, y=1, z=0.65), # إبراز العمق والتضاريس
+                aspectratio=dict(x=1, y=1, z=0.65),
                 camera=dict(
                     eye=dict(x=-1.5, y=-1.5, z=1.1)
                 )
@@ -191,3 +192,82 @@ if uploaded_file is not None:
         )
 
         st.plotly_chart(fig_3d, use_container_width=True)
+
+    # --- Tab 5: تفكيك أويلر 3D (3D Euler Deconvolution) ---
+    with tab5:
+        st.subheader("🎯 تفكيك أويلر ثلاثي الأبعاد (3D Euler Deconvolution)")
+        st.markdown("حساب مواضع وأعماق الصدوع والتراكيب العميقة بأسلوب النافذة المتحركة للمعادلة التجانسية.")
+
+        col_e1, col_e2 = st.columns(2)
+        si_val = col_e1.selectbox("الدليل البنيوي (Structural Index - SI):", 
+                                  options=[0, 1, 2], 
+                                  index=0, 
+                                  format_func=lambda x: f"SI = {x} ({'الصدوع والتماسات Faults/Contacts' if x==0 else 'القواطع Dikes' if x==1 else 'الكرات/الأجسام المحدودة Spheres'})")
+        w_size = col_e2.slider("حجم النافذة المتحركة (Window Size):", 3, 9, 5, step=2)
+
+        # خوارزمية أويلر
+        e_x, e_y, e_z = [], [], []
+        gz_x, gz_y, gz_z = gx / 1000.0, gy / 1000.0, fvd / 1000.0
+        w_half = w_size // 2
+
+        for i in range(w_half, ny - w_half, 2):
+            for j in range(w_half, nx - w_half, 2):
+                sub_gx = gz_x[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+                sub_gy = gz_y[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+                sub_gz = gz_z[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+                sub_g = grid_gz[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+
+                sub_x = grid_x[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+                sub_y = grid_y[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+
+                # بناء مصفوفة A والمترجم B
+                A = np.column_stack([sub_gx, sub_gy, sub_gz, np.ones_like(sub_gx)])
+                rhs = sub_x * sub_gx + sub_y * sub_gy + si_val * sub_g
+
+                try:
+                    sol, residuals, rank, s = np.linalg.lstsq(A, rhs, rcond=None)
+                    x0, y0, z0, b_const = sol
+                    calc_depth = -abs(z0)
+
+                    # تصفية الحلول المقبولة
+                    if -3500 <= calc_depth <= -100 and grid_x.min() <= x0 <= grid_x.max() and grid_y.min() <= y0 <= grid_y.max():
+                        e_x.append(x0)
+                        e_y.append(y0)
+                        e_z.append(calc_depth)
+                except Exception:
+                    continue
+
+        if len(e_x) > 0:
+            st.success(f"تم تمثيل {len(e_x)} حلول جيوفيزيائية صالحة بنجاح (Euler Solutions)!")
+
+            # رسم السحابة النقطية ثلاثية الأبعاد للحلول
+            fig_euler = go.Figure(data=[
+                go.Scatter3d(
+                    x=e_x,
+                    y=e_y,
+                    z=e_z,
+                    mode='markers',
+                    marker=dict(
+                        size=4,
+                        color=e_z,
+                        colorscale='Rainbow',
+                        colorbar_title='Euler Depth (m)',
+                        opacity=0.85
+                    )
+                )
+            ])
+
+            fig_euler.update_layout(
+                title=f'3D Euler Structural Solutions (SI = {si_val})',
+                scene=dict(
+                    xaxis_title='Longitude (°E)',
+                    yaxis_title='Latitude (°N)',
+                    zaxis_title='Depth (m)',
+                    aspectratio=dict(x=1, y=1, z=0.7)
+                ),
+                margin=dict(l=0, r=0, b=0, t=40)
+            )
+
+            st.plotly_chart(fig_euler, use_container_width=True)
+        else:
+            st.warning("لم يتم العثور على حلول مستقرة ضمن النطاق المكرر، حاول تغيير حجم النافذة أو الدليل البنيوي.")
