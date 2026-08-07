@@ -42,7 +42,7 @@ if uploaded_file is not None:
         grid_gz_nearest = griddata((x, y), z, (grid_x, grid_y), method='nearest')
         grid_gz = np.where(np.isnan(grid_gz), grid_gz_nearest, grid_gz)
 
-    # حساب المسافات
+    # حساب المسافات بالشبكة بالأمتار
     mean_lat_rad = np.radians(y.mean())
     dx = ((x.max() - x.min()) / 100) * 111000 * np.cos(mean_lat_rad)
     dy = ((y.max() - y.min()) / 100) * 111000
@@ -80,7 +80,7 @@ if uploaded_file is not None:
     gz_norm = (grid_gz - gz_min) / (gz_max - gz_min + 1e-9)
     z_basement_3d = -1700.0 + (gz_norm * 800.0)
 
-    # إضافة التبويبات الخمسة
+    # التبويبات الخمسة
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "1️⃣ الخرائط والتحليل الطيفي",
         "2️⃣ الصدوع وتصدير GIS",
@@ -89,6 +89,7 @@ if uploaded_file is not None:
         "5️⃣ تفكيك أويلر 3D (Euler)"
     ])
 
+    # --- Tab 1: الخرائط والتحليل الطيفي ---
     with tab1:
         st.subheader("خرائط المشتقات المكانية لبيانات الجاذبية")
         fig1, axes = plt.subplots(2, 2, figsize=(10, 8), dpi=200)
@@ -119,6 +120,7 @@ if uploaded_file is not None:
         col_a.metric("عمق ركيزة القاعدة العميقة (Basement)", f"{deep_depth / 1000.0:.2f} km")
         col_b.metric("عمق التراكيب والصدوع الضحلة", f"{shallow_depth:.0f} m")
 
+    # --- Tab 2: استخراج الصدوع وتصدير ArcMap ---
     with tab2:
         st.subheader("تتبع الصدوع والتراكيب وتصدير الطبقة الرقمية")
         threshold = st.slider("مستوى حساسية الالتقاط (THG Threshold):", float(thg.min()), float(thg.max()), float(np.percentile(thg, 85)))
@@ -138,6 +140,7 @@ if uploaded_file is not None:
 
         st.download_button("💾 تنزيل طبقة الصدوع (GeoJSON جاهز لـ ArcMap/QGIS/Surfer)", geojson_str, "extracted_faults.geojson", "application/json")
 
+    # --- Tab 3: القطاع الجيولوجي 2D ---
     with tab3:
         st.subheader("القطاع الجيولوجي ثنائي الأبعاد (2D Inversion Cross-Section)")
         lat_idx = st.slider("اختر خط العرض للقطاع (Latitude Index):", 0, 99, 50)
@@ -193,7 +196,7 @@ if uploaded_file is not None:
 
         st.plotly_chart(fig_3d, use_container_width=True)
 
-    # --- Tab 5: تفكيك أويلر 3D (3D Euler Deconvolution) ---
+    # --- Tab 5: تفكيك أويلر 3D (Euler Deconvolution المحدث والناجح) ---
     with tab5:
         st.subheader("🎯 تفكيك أويلر ثلاثي الأبعاد (3D Euler Deconvolution)")
         st.markdown("حساب مواضع وأعماق الصدوع والتراكيب العميقة بأسلوب النافذة المتحركة للمعادلة التجانسية.")
@@ -203,44 +206,49 @@ if uploaded_file is not None:
                                   options=[0, 1, 2], 
                                   index=0, 
                                   format_func=lambda x: f"SI = {x} ({'الصدوع والتماسات Faults/Contacts' if x==0 else 'القواطع Dikes' if x==1 else 'الكرات/الأجسام المحدودة Spheres'})")
-        w_size = col_e2.slider("حجم النافذة المتحركة (Window Size):", 3, 9, 5, step=2)
+        w_size = col_e2.slider("حجم النافذة المتحركة (Window Size):", 3, 9, 3, step=2)
 
-        # خوارزمية أويلر
+        # تحويل الشبكة الجغرافية للأمتار لحسابات مصفوفة أويلر
+        x_m = (grid_x - grid_x.min()) * 111000 * np.cos(mean_lat_rad)
+        y_m = (grid_y - grid_y.min()) * 111000
+
         e_x, e_y, e_z = [], [], []
-        gz_x, gz_y, gz_z = gx / 1000.0, gy / 1000.0, fvd / 1000.0
         w_half = w_size // 2
 
-        for i in range(w_half, ny - w_half, 2):
-            for j in range(w_half, nx - w_half, 2):
-                sub_gx = gz_x[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
-                sub_gy = gz_y[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
-                sub_gz = gz_z[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+        for i in range(w_half, ny - w_half):
+            for j in range(w_half, nx - w_half):
+                sub_gx = gx[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+                sub_gy = gy[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+                sub_gz = fvd[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
                 sub_g = grid_gz[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
 
-                sub_x = grid_x[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
-                sub_y = grid_y[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+                sub_x = x_m[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
+                sub_y = y_m[i-w_half:i+w_half+1, j-w_half:j+w_half+1].flatten()
 
-                # بناء مصفوفة A والمترجم B
+                # نظام معادلات أويلر
                 A = np.column_stack([sub_gx, sub_gy, sub_gz, np.ones_like(sub_gx)])
                 rhs = sub_x * sub_gx + sub_y * sub_gy + si_val * sub_g
 
                 try:
-                    sol, residuals, rank, s = np.linalg.lstsq(A, rhs, rcond=None)
-                    x0, y0, z0, b_const = sol
-                    calc_depth = -abs(z0)
+                    sol, _, rank, _ = np.linalg.lstsq(A, rhs, rcond=1e-3)
+                    if rank == 4:
+                        x0_m, y0_m, z0_m, _ = sol
+                        calc_depth = -abs(z0_m)
 
-                    # تصفية الحلول المقبولة
-                    if -3500 <= calc_depth <= -100 and grid_x.min() <= x0 <= grid_x.max() and grid_y.min() <= y0 <= grid_y.max():
-                        e_x.append(x0)
-                        e_y.append(y0)
-                        e_z.append(calc_depth)
+                        # تحويل الإحداثيات المحسوبة عكسياً إلى درجات لعرضها على الخريطة
+                        x0_geo = grid_x.min() + (x0_m / (111000 * np.cos(mean_lat_rad)))
+                        y0_geo = grid_y.min() + (y0_m / 111000)
+
+                        if grid_x.min() <= x0_geo <= grid_x.max() and grid_y.min() <= y0_geo <= grid_y.max():
+                            e_x.append(x0_geo)
+                            e_y.append(y0_geo)
+                            e_z.append(calc_depth)
                 except Exception:
                     continue
 
         if len(e_x) > 0:
-            st.success(f"تم تمثيل {len(e_x)} حلول جيوفيزيائية صالحة بنجاح (Euler Solutions)!")
+            st.success(f"تم العثور على {len(e_x)} حلول جيوفيزيائية صالحة لمواضع الصدوع والتركيبات!")
 
-            # رسم السحابة النقطية ثلاثية الأبعاد للحلول
             fig_euler = go.Figure(data=[
                 go.Scatter3d(
                     x=e_x,
@@ -248,11 +256,11 @@ if uploaded_file is not None:
                     z=e_z,
                     mode='markers',
                     marker=dict(
-                        size=4,
+                        size=3,
                         color=e_z,
-                        colorscale='Rainbow',
+                        colorscale='Turbo',
                         colorbar_title='Euler Depth (m)',
-                        opacity=0.85
+                        opacity=0.8
                     )
                 )
             ])
@@ -270,4 +278,4 @@ if uploaded_file is not None:
 
             st.plotly_chart(fig_euler, use_container_width=True)
         else:
-            st.warning("لم يتم العثور على حلول مستقرة ضمن النطاق المكرر، حاول تغيير حجم النافذة أو الدليل البنيوي.")
+            st.warning("لم يتم العثور على حلول ضمن النطاق الحالي، يرجى اختيار حجم نافذة = 3 أو تغيير SI.")
