@@ -4,7 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import json
 
-# ضبط إعدادات الصفحة في Streamlit
+# ضبط إعدادات الصفحة
 st.set_page_config(
     page_title="تحليل الجسات والجيوكهرباء",
     page_icon="⚡",
@@ -17,39 +17,40 @@ st.markdown("---")
 # ==========================================
 # 1. الاتصال الآمن بـ Google Earth Engine
 # ==========================================
-@st.cache_resource
-def init_earth_engine():
-    try:
-        import ee
-        # محاولة المصادقة عبر Streamlit Secrets
-        if "gcp_service_account" in st.secrets:
-            service_account_info = json.loads(st.secrets["gcp_service_account"])
-            credentials = ee.ServiceAccountCredentials(
-                service_account_info['client_email'],
-                key_data=json.dumps(service_account_info)
-            )
-            ee.Initialize(credentials)
-            return ee, True
-        else:
-            # تهيئة افتراضية
-            ee.Initialize()
-            return ee, True
-    except Exception as e:
-        return None, False
+ee_connected = False
+ee_module = None
 
-ee, ee_connected = init_earth_engine()
+try:
+    import ee
+    # محاولة المصادقة فقط إذا كانت المفاتيح متوفرة في Secrets
+    if "gcp_service_account" in st.secrets:
+        service_account_info = json.loads(st.secrets["gcp_service_account"])
+        credentials = ee.ServiceAccountCredentials(
+            service_account_info['client_email'],
+            key_data=json.dumps(service_account_info)
+        )
+        ee.Initialize(credentials)
+        ee_connected = True
+        ee_module = ee
+    else:
+        # محاولة تهيئة بديلة دون التعطيل
+        ee.Initialize()
+        ee_connected = True
+        ee_module = ee
+except Exception as e:
+    ee_connected = False
 
+# تنبيه للمستخدم بحالة الاتصال
 if ee_connected:
     st.success("✅ تم الاتصال بـ Google Earth Engine بنجاح!")
 else:
-    st.warning("⚠️ لم يتم تفعيل الاتصال المباشر بـ Earth Engine (تأكد من إعداد المفاتيح في Streamlit Secrets). تم تفعيل وضع التحليل الميداني المحلي.")
+    st.info("💡 يتم الآن عرض تحليل الجسة الميدانية محلياً (الاتصال الفضائي يتطلب ضبط مفاتيح Earth Engine في Streamlit Secrets).")
 
 # ==========================================
 # 2. البيانات الميدانية للجسة (VES No. 2)
 # ==========================================
 st.subheader("📊 بيانات الجسة الميدانية (VES No. 2)")
 
-# بيانات الإحداثيات المرفقة
 utm_easting = 330407
 utm_northing = 1558564
 elevation_masl = 208
@@ -76,11 +77,12 @@ ves2_data = {
 
 df_ves = pd.DataFrame(ves2_data)
 
-# حساب متوسط المقاومية الفعالة للطبقة العميقة المشبعة
+# حساب متوسط المقاومية الفعالة للطبقة العميقة
 deep_aquifer_rho = df_ves[df_ves['AB/2 (m)'] >= 200]['Rho_a (Ohm.m)'].mean()
 
 with col1:
     st.metric(label="متوسط مقاومية النطاق المشبع (AB/2 ≥ 200m)", value=f"{deep_aquifer_rho:.2f} Ohm.m")
+    st.dataframe(df_ves.head(8), use_container_width=True)
 
 # رسم منحنى الجسة Log-Log Plot
 with col2:
@@ -96,40 +98,37 @@ with col2:
 st.markdown("---")
 
 # ==========================================
-# 3. معالجة وتدريب نموذج التنبؤ
+# 3. معالجة وتدريب النموذج (معزل آمن)
 # ==========================================
 st.subheader("🤖 النمذجة والربط بالتعلم الآلي (Machine Learning)")
 
-if ee_connected:
+if ee_connected and ee_module is not None:
     try:
-        # تحويل الإحداثيات
         lon, lat = 43.4295812, 14.0931013
-        ves_point = ee.Geometry.Point([lon, lat])
+        ves_point = ee_module.Geometry.Point([lon, lat])
         roi = ves_point.buffer(5000)
 
-        # استدعاء طبقات SAR و Landsat LST
-        sar = ee.ImageCollection('COPERNICUS/S1_GRD') \
+        sar = ee_module.ImageCollection('COPERNICUS/S1_GRD') \
                 .filterBounds(roi) \
-                .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV')) \
+                .filter(ee_module.Filter.listContains('transmitterReceiverPolarisation', 'VV')) \
                 .select('VV').mean().clip(roi)
 
-        landsat = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2') \
+        landsat = ee_module.ImageCollection('LANDSAT/LC08/C02/T1_L2') \
                     .filterBounds(roi) \
-                    .filter(ee.Filter.lt('CLOUD_COVER', 15)).median()
+                    .filter(ee_module.Filter.lt('CLOUD_COVER', 15)).median()
 
         lst = landsat.select('ST_B10').multiply(0.00341802).add(149.0).subtract(273.15).clip(roi)
-        dem = ee.Image('USGS/SRTMGL1_003').clip(roi)
-        slope = ee.Terrain.slope(dem)
+        dem = ee_module.Image('USGS/SRTMGL1_003').clip(roi)
+        slope = ee_module.Terrain.slope(dem)
 
-        stack = ee.Image.cat([sar.rename('SAR_VV'), lst.rename('LST'), dem.rename('ELEVATION'), slope.rename('SLOPE')])
+        stack = ee_module.Image.cat([sar.rename('SAR_VV'), lst.rename('LST'), dem.rename('ELEVATION'), slope.rename('SLOPE')])
         
-        # استخراج القيم بالنقطة
-        features = stack.reduceRegion(reducer=ee.Reducer.first(), geometry=ves_point, scale=30).getInfo()
+        features = stack.reduceRegion(reducer=ee_module.Reducer.first(), geometry=ves_point, scale=30).getInfo()
         
         st.write("📌 **المؤشرات الفضائية المستخرجة عند موقع الجسة:**")
         st.json(features)
 
     except Exception as e:
-        st.error(f"حدث خطأ أثناء معالجة طبقات Earth Engine: {e}")
+        st.warning(f"تعذر جلب الطبقات الفضائية: {e}")
 else:
-    st.info("💡 بمجرد تفعيل مفاتيح Earth Engine، سيتم دمج المؤشرات الفضائية آلياً لإنشاء خريطة التنبؤ بالخزان الجوفي.")
+    st.write("📊 **وضع المعالجة المحلي متفعل:** التطبيق يعرض المنحنيات والحسابات الجيوكهربائية للجسة الميدانية بنجاح دون أي توقف.")
