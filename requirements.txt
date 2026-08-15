@@ -11,5 +11,9 @@ plotly
 scipy
 opencv-python-headless
 openpyxl
+earthengine-api
+geemap
+streamlit-geemap
+scikit-learn
 
 
