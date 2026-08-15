@@ -15,12 +15,11 @@ st.title("⚡ دمج الجسات الجيوكهربائية (VES) مع البي
 st.markdown("---")
 
 # ==========================================
-# 1. الاتصال الآمن والآمن جداً بـ Earth Engine
+# 1. الاتصال بـ Google Earth Engine
 # ==========================================
 ee_connected = False
 ee_module = None
 
-# لا نقوم بعمل import ee في أعلى الملف تجنباً لكرش السيرفر
 try:
     if "gcp_service_account" in st.secrets:
         import ee
@@ -79,21 +78,27 @@ with col1:
     st.metric(label="متوسط مقاومية النطاق المشبع (AB/2 ≥ 200m)", value=f"{deep_aquifer_rho:.2f} Ohm.m")
     st.dataframe(df_ves.head(8), use_container_width=True)
 
-# رسم منحنى الجسة Log-Log Plot
-with col2:
+# دالة آمنة للرسم مع تفريغ الذاكرة فوراً
+@st.cache_data
+def make_ves_plot(data):
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.loglog(df_ves['AB/2 (m)'], df_ves['Rho_a (Ohm.m)'], 'ro-', label='VES No. 2 المقاس')
+    ax.loglog(data['AB/2 (m)'], data['Rho_a (Ohm.m)'], 'ro-', label='VES No. 2 المقاس')
     ax.set_xlabel('نصف مسافة الأقطاب AB/2 (متر)')
     ax.set_ylabel('المقاومية الظاهرية Rho_a (أوم.متر)')
     ax.set_title('منحنى الجسة الجيوكهربائية (Log-Log)')
     ax.grid(True, which="both", ls="--", alpha=0.6)
     ax.legend()
+    return fig
+
+with col2:
+    fig = make_ves_plot(df_ves)
     st.pyplot(fig)
+    plt.close(fig) # إغلاق الشكل فوراً لتفريغ الرام
 
 st.markdown("---")
 
 # ==========================================
-# 3. النمذجة والربط المشروط
+# 3. النمذجة والربط
 # ==========================================
 st.subheader("🤖 النمذجة والربط بالتعلم الآلي (Machine Learning)")
 
@@ -126,4 +131,4 @@ if ee_connected and ee_module is not None:
     except Exception as e:
         st.warning(f"تعذر جلب البيانات الفضائية: {e}")
 else:
-    st.success("✅ تم رسم المنحنيات وجدول الجسة بنجاح! التطبيق يعمل الآن بواجهة ثابتة وسريعة المستجابة.")
+    st.success("✅ وضع المعالجة المستقر: خفيف جداً على الذاكرة ولن يستنزف سيرفر Streamlit.")
