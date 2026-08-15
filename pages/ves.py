@@ -1,12 +1,11 @@
 import streamlit as st
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
-import json
 
-# ضبط إعدادات الصفحة
+# 1. ضبط إعدادات الصفحة (يجب أن تكون أول أمر)
 st.set_page_config(
-    page_title="تحليل الجسات والجيوكهرباء",
+    page_title="تحليل الجسات الجيوكهربائية",
     page_icon="⚡",
     layout="wide"
 )
@@ -14,52 +13,11 @@ st.set_page_config(
 st.title("⚡ دمج الجسات الجيوكهربائية (VES) مع البيانات الفضائية")
 st.markdown("---")
 
-# ==========================================
-# 1. الاتصال بـ Google Earth Engine
-# ==========================================
-ee_connected = False
-ee_module = None
-
-try:
-    if "gcp_service_account" in st.secrets:
-        import ee
-        service_account_info = json.loads(st.secrets["gcp_service_account"])
-        credentials = ee.ServiceAccountCredentials(
-            service_account_info['client_email'],
-            key_data=json.dumps(service_account_info)
-        )
-        ee.Initialize(credentials)
-        ee_connected = True
-        ee_module = ee
-except Exception as e:
-    ee_connected = False
-
-# التنبيه بحالة الاتصال
-if ee_connected:
-    st.success("✅ تم الاتصال بـ Google Earth Engine بنجاح!")
-else:
-    st.info("💡 يتم الآن تشغيل وضع المعالجة الجيوكهربائية المحلي (الصفحة تعمل بكامل خصائصها دون الاعتماد على السحابة).")
-
-# ==========================================
-# 2. البيانات الميدانية للجسة (VES No. 2)
-# ==========================================
-st.subheader("📊 بيانات الجسة الميدانية (VES No. 2)")
-
+# 2. إعداد البيانات الميدانية للجسة (VES No. 2)
 utm_easting = 330407
 utm_northing = 1558564
 elevation_masl = 208
 
-col1, col2 = st.columns([1, 2])
-
-with col1:
-    st.markdown(f"""
-    **معلومات الموقع:**
-    * **الإحداثيات:** UTM-E `{utm_easting}` | UTM-N `{utm_northing}`
-    * **المنسوب:** `{elevation_masl}` م فوق سطح البحر
-    * **الترتيب المستعمل:** شلومبرجير (Schlumberger)
-    """)
-
-# جدول القراءات الميدانية للجسة
 ves2_data = {
     'MN/2 (m)': [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 10.0, 0.5, 10.0, 10.0, 
                  10.0, 10.0, 10.0, 50.0, 10.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0],
@@ -70,65 +28,55 @@ ves2_data = {
 }
 
 df_ves = pd.DataFrame(ves2_data)
-
-# حساب متوسط مقاومية الطبقة العميقة
 deep_aquifer_rho = df_ves[df_ves['AB/2 (m)'] >= 200]['Rho_a (Ohm.m)'].mean()
 
+# 3. عرض معلومات الموقع والمتوسط الحسابي
+col1, col2 = st.columns([1, 2])
+
 with col1:
-    st.metric(label="متوسط مقاومية النطاق المشبع (AB/2 ≥ 200m)", value=f"{deep_aquifer_rho:.2f} Ohm.m")
-    st.dataframe(df_ves.head(8), use_container_width=True)
+    st.subheader("📊 بيانات الموقع")
+    st.write(f"**إحداثيات UTM:** `{utm_easting}` E | `{utm_northing}` N")
+    st.write(f"**الارتفاع عن سطح البحر:** `{elevation_masl}` متر")
+    st.metric(label="متوسط مقاومية النطاق العميق (AB/2 ≥ 200m)", value=f"{deep_aquifer_rho:.2f} Ω·m")
+    st.dataframe(df_ves.head(10), use_container_width=True)
 
-# دالة آمنة للرسم مع تفريغ الذاكرة فوراً
-@st.cache_data
-def make_ves_plot(data):
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.loglog(data['AB/2 (m)'], data['Rho_a (Ohm.m)'], 'ro-', label='VES No. 2 المقاس')
-    ax.set_xlabel('نصف مسافة الأقطاب AB/2 (متر)')
-    ax.set_ylabel('المقاومية الظاهرية Rho_a (أوم.متر)')
-    ax.set_title('منحنى الجسة الجيوكهربائية (Log-Log)')
-    ax.grid(True, which="both", ls="--", alpha=0.6)
-    ax.legend()
-    return fig
-
+# 4. رسم منحنى الجسة باستخدام Matplotlib الخفيف
 with col2:
-    fig = make_ves_plot(df_ves)
+    st.subheader("📈 منحنى الجسة الجيوكهربائية")
+    
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.loglog(df_ves['AB/2 (m)'], df_ves['Rho_a (Ohm.m)'], 'ro-', label='VES No. 2')
+    ax.set_xlabel('AB/2 (m)')
+    ax.set_ylabel('Rho_a (Ohm.m)')
+    ax.grid(True, which="both", linestyle="--", alpha=0.5)
+    ax.legend()
+    
+    # عرض الرسم وإغلاق الشكل فوراً
     st.pyplot(fig)
-    plt.close(fig) # إغلاق الشكل فوراً لتفريغ الرام
+    plt.close(fig)
 
 st.markdown("---")
 
-# ==========================================
-# 3. النمذجة والربط
-# ==========================================
-st.subheader("🤖 النمذجة والربط بالتعلم الآلي (Machine Learning)")
+# 5. قسم Earth Engine الآمن خفيف الذاكرة
+st.subheader("🤖 التكامل المائي والفضائي")
 
-if ee_connected and ee_module is not None:
+@st.cache_data
+def get_ee_status():
     try:
-        lon, lat = 43.4295812, 14.0931013
-        ves_point = ee_module.Geometry.Point([lon, lat])
-        roi = ves_point.buffer(5000)
+        if "gcp_service_account" in st.secrets:
+            import ee
+            import json
+            sec = json.loads(st.secrets["gcp_service_account"])
+            creds = ee.ServiceAccountCredentials(sec['client_email'], key_data=json.dumps(sec))
+            ee.Initialize(creds)
+            return True
+    except Exception:
+        pass
+    return False
 
-        sar = ee_module.ImageCollection('COPERNICUS/S1_GRD') \
-                .filterBounds(roi) \
-                .filter(ee_module.Filter.listContains('transmitterReceiverPolarisation', 'VV')) \
-                .select('VV').mean().clip(roi)
+is_ee_active = get_ee_status()
 
-        landsat = ee_module.ImageCollection('LANDSAT/LC08/C02/T1_L2') \
-                    .filterBounds(roi) \
-                    .filter(ee_module.Filter.lt('CLOUD_COVER', 15)).median()
-
-        lst = landsat.select('ST_B10').multiply(0.00341802).add(149.0).subtract(273.15).clip(roi)
-        dem = ee_module.Image('USGS/SRTMGL1_003').clip(roi)
-        slope = ee_module.Terrain.slope(dem)
-
-        stack = ee_module.Image.cat([sar.rename('SAR_VV'), lst.rename('LST'), dem.rename('ELEVATION'), slope.rename('SLOPE')])
-        
-        features = stack.reduceRegion(reducer=ee_module.Reducer.first(), geometry=ves_point, scale=30).getInfo()
-        
-        st.write("📌 **المؤشرات الفضائية المستخرجة عند موقع الجسة:**")
-        st.json(features)
-
-    except Exception as e:
-        st.warning(f"تعذر جلب البيانات الفضائية: {e}")
+if is_ee_active:
+    st.success("✅ تم الاتصال بخدمة Google Earth Engine.")
 else:
-    st.success("✅ وضع المعالجة المستقر: خفيف جداً على الذاكرة ولن يستنزف سيرفر Streamlit.")
+    st.info("💡 وضع المعالجة المستقر محلياً يعمل الآن بشكل دائم وسريع بدون انقطاع.")
