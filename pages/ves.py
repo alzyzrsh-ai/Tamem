@@ -1,10 +1,9 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-# 1. ضبط إعدادات الصفحة (يجب أن تكون أول أمر)
+# ضبط إعدادات الصفحة
 st.set_page_config(
     page_title="تحليل الجسات الجيوكهربائية",
     page_icon="⚡",
@@ -14,7 +13,7 @@ st.set_page_config(
 st.title("⚡ دمج الجسات الجيوكهربائية (VES) مع البيانات الفضائية")
 st.markdown("---")
 
-# 2. إعداد البيانات الميدانية للجسة (VES No. 2)
+# البيانات الميدانية للجسة (VES No. 2)
 utm_easting = 330407
 utm_northing = 1558564
 elevation_masl = 208
@@ -31,7 +30,6 @@ ves2_data = {
 df_ves = pd.DataFrame(ves2_data)
 deep_aquifer_rho = df_ves[df_ves['AB/2 (m)'] >= 200]['Rho_a (Ohm.m)'].mean()
 
-# 3. عرض معلومات الموقع والمتوسط الحسابي
 col1, col2 = st.columns([1, 2])
 
 with col1:
@@ -39,45 +37,18 @@ with col1:
     st.write(f"**إحداثيات UTM:** `{utm_easting}` E | `{utm_northing}` N")
     st.write(f"**الارتفاع عن سطح البحر:** `{elevation_masl}` متر")
     st.metric(label="متوسط مقاومية النطاق العميق (AB/2 ≥ 200m)", value=f"{deep_aquifer_rho:.2f} Ω·m")
-    st.dataframe(df_ves.head(10), use_container_width=True)
+    st.dataframe(df_ves, use_container_width=True, height=280)
 
-# 4. رسم منحنى الجسة باستخدام Matplotlib الخفيف
 with col2:
-    st.subheader("📈 منحنى الجسة الجيوكهربائية")
-    
+    st.subheader("📈 منحنى الجسة الجيوكهربائية (Schlumberger)")
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.loglog(df_ves['AB/2 (m)'], df_ves['Rho_a (Ohm.m)'], 'ro-', label='VES No. 2')
     ax.set_xlabel('AB/2 (m)')
-    ax.set_ylabel('Rho_a (Ohm.m)')
+    ax.set_ylabel('Apparent Resistivity (Ohm.m)')
     ax.grid(True, which="both", linestyle="--", alpha=0.5)
     ax.legend()
-    
-    # عرض الرسم وإغلاق الشكل فوراً
     st.pyplot(fig)
     plt.close(fig)
 
 st.markdown("---")
-
-# 5. قسم Earth Engine الآمن خفيف الذاكرة
-st.subheader("🤖 التكامل المائي والفضائي")
-
-@st.cache_data
-def get_ee_status():
-    try:
-        if "gcp_service_account" in st.secrets:
-            import ee
-            import json
-            sec = json.loads(st.secrets["gcp_service_account"])
-            creds = ee.ServiceAccountCredentials(sec['client_email'], key_data=json.dumps(sec))
-            ee.Initialize(creds)
-            return True
-    except Exception:
-        pass
-    return False
-
-is_ee_active = get_ee_status()
-
-if is_ee_active:
-    st.success("✅ تم الاتصال بخدمة Google Earth Engine.")
-else:
-    st.info("💡 وضع المعالجة المستقر محلياً يعمل الآن بشكل دائم وسريع بدون انقطاع.")
+st.success("✅ تم تشغيل السكربت بنجاح واستقرار تام بدون الاعتماد على سيرفرات Earth Engine الخارجية.")
