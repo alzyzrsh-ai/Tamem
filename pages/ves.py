@@ -4,47 +4,58 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 
-# 1. إعدادات الصفحة
-st.set_page_config(
-    page_title="الجسات المجاورة والقطاعات الجيوكهربائية",
-    page_icon="⚡",
-    layout="wide"
-)
+st.set_page_config(page_title="رفع البيانات والقطاعات الجيوكهربائية", page_icon="⚡", layout="wide")
 
-st.title("⚡ تحليلات الجسات المجاورة والقطاع الرأسي (2D Section)")
+st.title("⚡ رفع البيانات والقطاع الجيوكهربائي الرأسي (2D Section)")
 st.markdown("---")
 
-# 2. بيانات الجسات الجيوكهربائية الميدانية (VES 1, VES 2, VES 3)
-ab2_distances = [1.5, 2.5, 4.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0, 400.0, 500.0]
+# 1. القائمة الجانبية لرفع البيانات
+st.sidebar.header("📁 رفع ملف البيانات")
+uploaded_file = st.sidebar.file_uploader("ارفع ملف Excel أو CSV للجسات", type=["xlsx", "csv"])
 
-ves_database = {
+# 2. البيانات الافتراضية
+ab2_distances = [1.5, 2.5, 4.0, 6.0, 8.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 75.0, 100.0, 150.0, 200.0, 300.0, 400.0, 500.0]
+default_data = {
     'AB/2 (m)': ab2_distances,
-    'VES-1 (مقاومية)': [380.0, 350.1, 310.2, 290.0, 260.5, 240.0, 210.0, 180.3, 140.0, 95.0, 70.0, 45.2, 30.0, 22.0, 18.5, 12.0, 11.5, 15.0],
-    'VES-2 (مقاومية)': [428.3, 382.6, 369.5, 319.8, 330.0, 349.3, 342.8, 315.4, 311.3, 245.3, 210.0, 166.7, 135.8, 73.0, 38.1, 15.2, 14.9, 16.5],
-    'VES-3 (مقاومية)': [510.0, 460.0, 410.2, 380.5, 350.0, 310.0, 280.0, 250.0, 190.0, 130.0, 90.0, 60.0, 42.0, 28.0, 21.0, 17.5, 18.0, 22.0]
+    'VES-1': [380.0, 350.1, 310.2, 290.0, 260.5, 240.0, 210.0, 180.3, 140.0, 95.0, 70.0, 45.2, 30.0, 22.0, 18.5, 12.0, 11.5, 15.0],
+    'VES-2': [428.3, 382.6, 369.5, 319.8, 330.0, 349.3, 342.8, 315.4, 311.3, 245.3, 210.0, 166.7, 135.8, 73.0, 38.1, 15.2, 14.9, 16.5],
+    'VES-3': [510.0, 460.0, 410.2, 380.5, 350.0, 310.0, 280.0, 250.0, 190.0, 130.0, 90.0, 60.0, 42.0, 28.0, 21.0, 17.5, 18.0, 22.0]
 }
 
-df_multi_ves = pd.DataFrame(ves_database)
+# 3. معالجة البيانات المرفوعة أو استخدام الافتراضية
+if uploaded_file is not None:
+    try:
+        if uploaded_file.name.endswith('.csv'):
+            df_multi_ves = pd.read_csv(uploaded_file)
+        else:
+            df_multi_ves = pd.read_excel(uploaded_file)
+        st.success("تم رفع الملف بنجاح! يتم استخدام بياناتك الميدانية الآن.")
+    except Exception as e:
+        st.error(f"خطأ في قراءة الملف: {e}")
+        df_multi_ves = pd.DataFrame(default_data)
+else:
+    st.info("💡 يتم عرض البيانات الافتراضية حالياً. يمكنك رفع ملفك الخاص من القائمة الجانبية (Sidebar).")
+    df_multi_ves = pd.DataFrame(default_data)
 
-# مواضع الجسات الميدانية بالأمتار على خط المسار (Profile Distance)
-ves_positions = {'VES-1': 0, 'VES-2': 250, 'VES-3': 500}
+# 4. اختيار المسافات بين الجسات
+st.sidebar.subheader("📐 المسافات بين الجسات (متر)")
+ves_cols = [col for col in df_multi_ves.columns if col != 'AB/2 (m)']
+ves_positions = {}
 
-# 3. عرض المقارنة المنحنية للجسات الثلاث
-st.subheader("📈 مقارنة منحنيات الجسات المجاورة")
+for idx, col in enumerate(ves_cols):
+    ves_positions[col] = st.sidebar.number_input(f"مسافة {col}", value=idx * 250, step=50)
+
+# 5. عرض منحنيات الجسات
+st.subheader("📈 منحنيات المقاومية الظاهرية")
 col_left, col_right = st.columns([1, 2])
 
 with col_left:
-    st.markdown("**مواقع الجسات على المسار:**")
-    for name, pos in ves_positions.items():
-        st.write(f"• **{name}:** عند المسافة `{pos} متر`")
-    
-    st.dataframe(df_multi_ves, use_container_width=True, height=280)
+    st.dataframe(df_multi_ves, use_container_width=True, height=320)
 
 with col_right:
-    fig_curves, ax_curves = plt.subplots(figsize=(7, 4))
-    ax_curves.loglog(df_multi_ves['AB/2 (m)'], df_multi_ves['VES-1 (مقاومية)'], 'b-o', label='VES-1 (0m)')
-    ax_curves.loglog(df_multi_ves['AB/2 (m)'], df_multi_ves['VES-2 (مقاومية)'], 'r-o', label='VES-2 (250m)')
-    ax_curves.loglog(df_multi_ves['AB/2 (m)'], df_multi_ves['VES-3 (مقاومية)'], 'g-o', label='VES-3 (500m)')
+    fig_curves, ax_curves = plt.subplots(figsize=(7, 4.2))
+    for col in ves_cols:
+        ax_curves.loglog(df_multi_ves['AB/2 (m)'], df_multi_ves[col], '-o', label=f"{col} ({ves_positions[col]}m)")
     
     ax_curves.set_xlabel('AB/2 (m)')
     ax_curves.set_ylabel('Apparent Resistivity (Ohm.m)')
@@ -55,22 +66,20 @@ with col_right:
 
 st.markdown("---")
 
-# 4. بناء القطاع الجيوكهربائي الثنائي الأبعاد (2D Pseudo-Section)
+# 6. بناء المقطع الجيوكهربائي 2D Section
 st.subheader("🗺️ المقطع الجيوكهربائي الرأسي (2D Pseudo-Section)")
 
-# إعداد شبكة الاستيفاء (Interpolation Grid)
-x_coords = []
-z_coords = []
-rho_values = []
+x_coords, z_coords, rho_values = [], [], []
 
-for name, pos in ves_positions.items():
-    col_name = f"{name} (مقاومية)"
-    for ab2, rho in zip(df_multi_ves['AB/2 (m)'], df_multi_ves[col_name]):
+for col in ves_cols:
+    pos = ves_positions[col]
+    for ab2, rho in zip(df_multi_ves['AB/2 (m)'], df_multi_ves[col]):
         x_coords.append(pos)
-        z_coords.append(ab2)  # AB/2 يعكس عمق التغلغل الظاهري
+        z_coords.append(ab2)
         rho_values.append(rho)
 
-grid_x, grid_z = np.mgrid[0:500:100j, min(ab2_distances):max(ab2_distances):100j]
+max_pos = max(ves_positions.values()) if max(ves_positions.values()) > 0 else 100
+grid_x, grid_z = np.mgrid[0:max_pos:100j, min(df_multi_ves['AB/2 (m)']):max(df_multi_ves['AB/2 (m)']):100j]
 grid_rho = griddata((x_coords, z_coords), rho_values, (grid_x, grid_z), method='cubic')
 
 fig_sec, ax_sec = plt.subplots(figsize=(10, 4.5))
@@ -78,17 +87,13 @@ contour = ax_sec.contourf(grid_x, grid_z, grid_rho, levels=20, cmap='jet_r')
 cbar = fig_sec.colorbar(contour, ax=ax_sec)
 cbar.set_label('Apparent Resistivity (Ohm.m)', rotation=270, labelpad=15)
 
-# تحديد مواقع الجسات على المقطع
-for name, pos in ves_positions.items():
+for col, pos in ves_positions.items():
     ax_sec.axvline(x=pos, color='black', linestyle='--', alpha=0.7)
-    ax_sec.text(pos, min(ab2_distances)-5, name, horizontalalignment='center', fontweight='bold')
+    ax_sec.text(pos, min(df_multi_ves['AB/2 (m)'])-2, col, horizontalalignment='center', fontweight='bold')
 
-ax_sec.set_ylim(max(ab2_distances), min(ab2_distances))  # عكس المحور الرأسي ليمثل العمق
+ax_sec.set_ylim(max(df_multi_ves['AB/2 (m)']), min(df_multi_ves['AB/2 (m)']))
 ax_sec.set_xlabel('Profile Distance (m)')
 ax_sec.set_ylabel('Pseudo-Depth / (AB/2 in meters)')
-ax_sec.set_title('Cross-Section across VES-1, VES-2, and VES-3')
 
 st.pyplot(fig_sec)
 plt.close(fig_sec)
-
-st.info("💡 **القراءة الهيدروجيولوجية للمقطع:** المناطق ذات المقاومية المنخفضة (باللون الأزرق $\le 20\ \Omega\cdot\text{m}$) تمثل نطاقات التشبع المائي الرئيسية وتوضح امتداد الخزان الجوفي بين الجسات.")
