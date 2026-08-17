@@ -9,9 +9,7 @@ google-generativeai
 xlsxwriter
 plotly
 scipy
-opencv-python-headless
 openpyxl
-
 geemap
 streamlit-geemap
 scikit-learn
