@@ -10,7 +10,6 @@ xlsxwriter
 plotly
 scipy
 openpyxl
-geemap
 streamlit-geemap
 scikit-learn
 
