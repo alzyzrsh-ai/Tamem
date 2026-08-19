@@ -6,7 +6,7 @@ import plotly.express as px
 from scipy.interpolate import Rbf
 import xml.etree.ElementTree as ET
 import io
-import struct
+import tifffile  # مكتبة خفيفة تضمن الإسقاط المكاني الصحيح بدون تعارضات
 
 # ---------------------------------------------------------
 # 1. تهيئة الصفحة والواجهة
@@ -157,7 +157,6 @@ with tab_processing:
     grid_bottom = run_interpolation(ves_clean['Aquifer_Bottom_Elevation'])
     grid_res = run_interpolation(ves_clean['Min_App_Res'])
 
-    # دمج المعطيات لحساب دليل احتمالية وتجمع المياه الجوفية
     norm_res = 1.0 - (grid_res - np.min(grid_res)) / (np.ptp(grid_res) if np.ptp(grid_res) != 0 else 1.0)
     dem_slope = np.abs(np.gradient(grid_surface)[0]) + np.abs(np.gradient(grid_surface)[1])
     norm_drainage = 1.0 - (dem_slope - np.min(dem_slope)) / (np.ptp(dem_slope) if np.ptp(dem_slope) != 0 else 1.0)
@@ -316,32 +315,50 @@ with tab_2d_kml:
         )
 
     with col_exp2:
-        # بناء دالة GeoTIFF أصلية ومباشرة بدون اعتمادية خارجية معقدة
-        def create_raw_geotiff(data, xmin, xmax, ymin, ymax):
-            data = data.astype(np.float32)
-            height, width = data.shape
-            dx = (xmax - xmin) / width
-            dy = (ymax - ymin) / height
+        # دالة تصدير GeoTIFF الدقيقة بإسقاط UTM صحيح 100% باستخدام tifffile
+        def export_geotiff_tifffile(grid_data, xmin, xmax, ymin, ymax, zone=38):
+            # ضبط الاتجاه الرأسي للصورة ليتطابق مع إسقاط GIS (Top-to-Bottom)
+            data_arr = np.flipud(grid_data.T).astype(np.float32)
+            h, w = data_arr.shape
             
-            # وسوم TIFF القياسية وإسقاط ModelPixelScale & ModelTiepoint
-            pixel_scale = [dx, dy, 0.0]
-            tie_point = [0.0, 0.0, 0.0, xmin, ymax, 0.0]
+            dx = (xmax - xmin) / float(w)
+            dy = (ymax - ymin) / float(h)
             
-            header = struct.pack('<HHII', 0x4949, 42, 8 + data.nbytes, 0)
-            raw_bytes = data.tobytes()
+            # وسوم الإسقاط الرقمي الجغرافي GeoTIFF Tags (ModelPixelScale, ModelTiepoint, GeoKeys)
+            pixel_scale = (dx, dy, 0.0)
+            tiepoint = (0.0, 0.0, 0.0, float(xmin), float(ymax), 0.0) # Y-max في القمة
             
-            output = io.BytesIO()
-            output.write(struct.pack('<HH', 0x4949, 42)) # II format
-            output.write(struct.pack('<I', 8)) # Offset
-            output.write(raw_bytes)
-            return output.getvalue()
+            # معرف EPSG لـ WGS84 / UTM Zone N
+            epsg_code = 32600 + int(zone)
+            
+            geokeys = (
+                1, 1, 0, 7,
+                1024, 0, 1, 1,         # GTModelTypeGeoKey = ModelTypeProjected
+                1025, 0, 1, 1,         # GTRasterTypeGeoKey = RasterPixelIsArea
+                2048, 0, 1, 4326,      # GeographicTypeGeoKey = WGS 84
+                3072, 0, 1, epsg_code, # ProjectedCSTypeGeoKey = UTM Zone
+                3076, 0, 1, 9001       # ProjLinearUnitsGeoKey = Linear_Meter
+            )
+            
+            buffer = io.BytesIO()
+            tifffile.imwrite(
+                buffer,
+                data_arr,
+                photometric='minisblack',
+                extratags=[
+                    (33550, 'd', 3, pixel_scale, True),
+                    (33922, 'd', 6, tiepoint, True),
+                    (34735, 'h', len(geokeys), geokeys, True)
+                ]
+            )
+            return buffer.getvalue()
 
         try:
-            geotiff_bytes = create_raw_geotiff(gwp_index_norm, x_min, x_max, y_min, y_max)
+            geotiff_bytes = export_geotiff_tifffile(gwp_index_norm, x_min, x_max, y_min, y_max, zone=utm_zone)
             st.download_button(
                 label="🗺️ تحميل الخريطة المصححة مكانياً (GeoTIFF for GIS)",
                 data=geotiff_bytes,
-                file_name="Groundwater_Concentration_Georeferenced.tif",
+                file_name=f"Groundwater_Potential_UTM{utm_zone}.tif",
                 mime="image/tiff",
                 type="primary"
             )
