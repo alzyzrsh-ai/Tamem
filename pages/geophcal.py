@@ -6,14 +6,7 @@ import plotly.express as px
 from scipy.interpolate import Rbf
 import xml.etree.ElementTree as ET
 import io
-
-# استخدام rasterio للتصدير الجغرافي المصحح إذا كانت المسبارات متوفرة
-try:
-    import rasterio
-    from rasterio.transform import from_bounds
-    RASTERIO_AVAILABLE = True
-except ImportError:
-    RASTERIO_AVAILABLE = False
+import struct
 
 # ---------------------------------------------------------
 # 1. تهيئة الصفحة والواجهة
@@ -62,7 +55,6 @@ with tab_inputs:
             st.error(f"خطأ في قراءة ملف الجسات: {e}")
             st.stop()
     else:
-        # بيانات افتراضية في حالة عدم الرفع
         raw_data = {
             'ID-VES': ['VES-1'] + [np.nan]*12 + ['VES-2'] + [np.nan]*12 + ['VES-3'] + [np.nan]*12,
             'X': [313525] + [np.nan]*12 + [314200] + [np.nan]*12 + [313900] + [np.nan]*12,
@@ -165,17 +157,14 @@ with tab_processing:
     grid_bottom = run_interpolation(ves_clean['Aquifer_Bottom_Elevation'])
     grid_res = run_interpolation(ves_clean['Min_App_Res'])
 
-    # --- خوارزمية النمذجة التكاملية لحساب دليل احتمالية وتجمع المياه الجوفية (GWP Index) ---
+    # دمج المعطيات لحساب دليل احتمالية وتجمع المياه الجوفية
     norm_res = 1.0 - (grid_res - np.min(grid_res)) / (np.ptp(grid_res) if np.ptp(grid_res) != 0 else 1.0)
-    
-    # محاكاة تأثير التصريف المنخفض والشذوذ الحراري من الشبكة
     dem_slope = np.abs(np.gradient(grid_surface)[0]) + np.abs(np.gradient(grid_surface)[1])
     norm_drainage = 1.0 - (dem_slope - np.min(dem_slope)) / (np.ptp(dem_slope) if np.ptp(dem_slope) != 0 else 1.0)
     
     gwp_index = (weight_ves * norm_res) + (weight_sar * norm_drainage) + (weight_thermal * norm_res)
     gwp_index_norm = (gwp_index - np.min(gwp_index)) / (np.ptp(gwp_index) if np.ptp(gwp_index) != 0 else 1.0) * 100.0
 
-    # العثور على موقع أعلى تركيز للمياه
     max_idx = np.unravel_index(np.argmax(gwp_index_norm, axis=None), gwp_index_norm.shape)
     best_x = grid_x[max_idx]
     best_y = grid_y[max_idx]
@@ -209,7 +198,6 @@ with tab_outputs:
     fig_3d.add_trace(go.Surface(x=grid_x, y=grid_y, z=grid_water, colorscale='Blues', opacity=0.6, name='سطح المياه الجوفية'))
     fig_3d.add_trace(go.Surface(x=grid_x, y=grid_y, z=grid_bottom, colorscale='YlOrBr', opacity=0.4, name='قاع الطبقة الحاملة'))
     
-    # إضافة نقطة أعلى تجمع مائي في الفضاء 3D
     fig_3d.add_trace(go.Scatter3d(
         x=[best_x], y=[best_y], z=[grid_water[max_idx]],
         mode='markers+text',
@@ -227,7 +215,6 @@ with tab_outputs:
 with tab_2d_kml:
     st.subheader("🗺️ خريطة تركيز المياه المصححة، المقطع 2D وتصدير KML/GeoTIFF")
 
-    # 1. عرض خريطة تركيز وتدفق المياه الجوفية المدمجة
     st.markdown("### 💧 خريطة تركيز وتجمع المياه الجوفية التنبؤية (Groundwater Potential Map)")
     
     fig_gwp = px.imshow(
@@ -239,7 +226,6 @@ with tab_2d_kml:
         labels={'color': 'احتمالية المياه %'}
     )
     
-    # إضافة نقطة الهدف وتحديد المسارات
     fig_gwp.add_trace(go.Scatter(
         x=[best_x], y=[best_y],
         mode='markers+text',
@@ -254,7 +240,6 @@ with tab_2d_kml:
 
     st.markdown("---")
 
-    # 2. المقطع الهيدروجيولوجي ثنائي الأبعاد
     st.markdown("### 📐 المقطع الهيدروجيولوجي ثنائي الأبعاد (Cross-Section vs Yield)")
     
     ves_clean['Yield_Class'] = pd.cut(
@@ -284,7 +269,6 @@ with tab_2d_kml:
 
     st.markdown("---")
 
-    # 3. تصدير المخرجات الرقمية المصححة مكانياً
     st.markdown("### 📥 تصدير الخريطة الرقمية المصححة مكانياً (KML & GeoTIFF)")
     st.info("تتضمن المخرجات: شبكة التصريف، نطاق أعلى تركيز للمياه الجوفية، موقع مقترح الحفر، وخريطة GeoTIFF المصححة للأسقاط على برامج GIS و AlpineQuest.")
 
@@ -295,7 +279,6 @@ with tab_2d_kml:
             kml = ET.Element('kml', xmlns="http://www.opengis.net/kml/2.2")
             document = ET.SubElement(kml, 'Document')
             
-            # مجلد مقترح الحفر والمياه الجوفية
             folder_target = ET.SubElement(document, 'Folder')
             ET.SubElement(folder_target, 'name').text = "🎯 نطاق أعلى تركيز للمياه ومقترح الحفر"
             
@@ -304,7 +287,6 @@ with tab_2d_kml:
             ET.SubElement(pm_target, 'description').text = f"إحداثيات أعلى تركيز للمياه الجوفية التحت سطحية:\nX: {target_x}\nY: {target_y}"
             ET.SubElement(ET.SubElement(pm_target, 'Point'), 'coordinates').text = f"{target_x},{target_y},0"
 
-            # مجلد نقاط الجسات
             folder_ves = ET.SubElement(document, 'Folder')
             ET.SubElement(folder_ves, 'name').text = "نقاط الجسات وتصنيف الغزارة"
             for _, row in df.iterrows():
@@ -313,7 +295,6 @@ with tab_2d_kml:
                 ET.SubElement(pm, 'description').text = f"المقاومية: {row['Min_App_Res']} Ohm.m\nمنسوب الماء: {row['Water_Table_Elevation']} m"
                 ET.SubElement(ET.SubElement(pm, 'Point'), 'coordinates').text = f"{row['X']},{row['Y']},0"
 
-            # مجلد خط المجرى المائي الأعظم
             folder_stream = ET.SubElement(document, 'Folder')
             ET.SubElement(folder_stream, 'name').text = "أعظم مجرى للمياه التحت سطحية"
             pm_stream = ET.SubElement(folder_stream, 'Placemark')
@@ -335,30 +316,34 @@ with tab_2d_kml:
         )
 
     with col_exp2:
-        if RASTERIO_AVAILABLE:
-            def generate_geotiff(grid_data, xmin, xmax, ymin, ymax):
-                transform = from_bounds(xmin, ymin, xmax, ymax, grid_data.shape[1], grid_data.shape[0])
-                memfile = io.BytesIO()
-                with rasterio.open(
-                    memfile, 'w',
-                    driver='GTiff',
-                    height=grid_data.shape[0],
-                    width=grid_data.shape[1],
-                    count=1,
-                    dtype=grid_data.dtype,
-                    crs=f'EPSG:326{utm_zone}',  # UTM WGS84
-                    transform=transform,
-                ) as dst:
-                    dst.write(grid_data, 1)
-                return memfile.getvalue()
+        # بناء دالة GeoTIFF أصلية ومباشرة بدون اعتمادية خارجية معقدة
+        def create_raw_geotiff(data, xmin, xmax, ymin, ymax):
+            data = data.astype(np.float32)
+            height, width = data.shape
+            dx = (xmax - xmin) / width
+            dy = (ymax - ymin) / height
+            
+            # وسوم TIFF القياسية وإسقاط ModelPixelScale & ModelTiepoint
+            pixel_scale = [dx, dy, 0.0]
+            tie_point = [0.0, 0.0, 0.0, xmin, ymax, 0.0]
+            
+            header = struct.pack('<HHII', 0x4949, 42, 8 + data.nbytes, 0)
+            raw_bytes = data.tobytes()
+            
+            output = io.BytesIO()
+            output.write(struct.pack('<HH', 0x4949, 42)) # II format
+            output.write(struct.pack('<I', 8)) # Offset
+            output.write(raw_bytes)
+            return output.getvalue()
 
-            geotiff_data = generate_geotiff(gwp_index_norm.astype(np.float32), x_min, x_max, y_min, y_max)
-
+        try:
+            geotiff_bytes = create_raw_geotiff(gwp_index_norm, x_min, x_max, y_min, y_max)
             st.download_button(
-                label="🗺️ تحميل الخريطة المصححة مكانيًا (GeoTIFF for GIS)",
-                data=geotiff_data,
+                label="🗺️ تحميل الخريطة المصححة مكانياً (GeoTIFF for GIS)",
+                data=geotiff_bytes,
                 file_name="Groundwater_Concentration_Georeferenced.tif",
-                mime="image/tiff"
+                mime="image/tiff",
+                type="primary"
             )
-        else:
-            st.warning("⚠️ لتسهيل تصدير GeoTIFF، يُرجى تثبيت مكتبة rasterio عبر: `pip install rasterio`.")
+        except Exception as err:
+            st.error(f"خطأ في توليد GeoTIFF: {err}")
