@@ -175,7 +175,7 @@ with tab_outputs:
 
     st.markdown("---")
 
-    # 4. المجسم ثلاثي الأبعاد المتقدم مع شبكة المجاري الجوفية (3D Subsurface & Channel Network)
+    # 4. المجسم ثلاثي الأبعاد المتقدم مع تدرج شدة المقاومية للمجرى الجوفي
     st.markdown("### 🧊 المجسم ثلاثي الأبعاد التفاعلي (3D Hydrogeological & Paleochannel Block)")
     
     fig_3d = go.Figure()
@@ -189,24 +189,30 @@ with tab_outputs:
     # طبقة منسوب المياه (Water Table Surface)
     fig_3d.add_trace(go.Surface(
         x=grid_x, y=grid_y, z=grid_water, 
-        colorscale='Blues', opacity=0.75, name='سطح المياه الجوفية', showscale=True,
-        colorbar=dict(title="منسوب المياه (م)")
+        colorscale='Blues', opacity=0.6, name='سطح المياه الجوفية', showscale=False
     ))
 
     # طبقة قاعدة الصخور (Bedrock)
     fig_3d.add_trace(go.Surface(
         x=grid_x, y=grid_y, z=grid_bottom, 
-        colorscale='YlOrBr', opacity=0.5, name='قاع الطبقة الحاملة', showscale=False
+        colorscale='YlOrBr', opacity=0.4, name='قاع الطبقة الحاملة', showscale=False
     ))
 
-    # استخراج وتتبع شبكة المجاري تحت السطحية (Subsurface Channel Extraction)
-    # المجرى يُحدد بالمناطق ذات المقاومية المنخفضة والسمك العالي داخل النطاق المشبع
+    # استخراج وتتبع شبكة المجاري تحت السطحية وتدريج لونها حسب شدة المقاومية
     channel_mask = (grid_res < res_threshold)
     channel_z = np.where(channel_mask, grid_water - 2, np.nan)
+    channel_intensity = np.where(channel_mask, grid_res, np.nan)
 
     fig_3d.add_trace(go.Surface(
-        x=grid_x, y=grid_y, z=channel_z,
-        colorscale='Darkblue', opacity=0.9, name='شبكة المجرى الجوفي (Paleochannel)', showscale=False
+        x=grid_x, 
+        y=grid_y, 
+        z=channel_z,
+        surfacecolor=channel_intensity,  # ربط التدرج بقيمة المقاومية الفعلية
+        colorscale='Jet_r',              # الأزرق الداكن يمثل أعلى موصلية (أدنى مقاومية)
+        opacity=0.9, 
+        name='شبكة المجرى الجوفي (Paleochannel)', 
+        showscale=True,
+        colorbar=dict(title="المقاومية (Ohm.m)", len=0.6, y=0.5)
     ))
 
     # إضافة مواقع آبار الجسات (VES Locations)
@@ -215,7 +221,7 @@ with tab_outputs:
         mode='markers+text',
         text=df_ves['VES_ID'],
         marker=dict(size=6, color='red', symbol='diamond'),
-        name='مواقع الجسات (VES)'
+        name='موقع الجسة (VES)'
     ))
 
     fig_3d.update_layout(
@@ -227,7 +233,7 @@ with tab_outputs:
         ),
         margin=dict(l=0, r=0, b=0, t=30),
         template="plotly_dark",
-        height=700
+        height=750
     )
     
     st.plotly_chart(fig_3d, use_container_width=True)
