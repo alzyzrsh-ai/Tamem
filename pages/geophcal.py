@@ -5,8 +5,6 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy.interpolate import Rbf
 from scipy.ndimage import gaussian_filter
-import rasterio
-from rasterio.io import MemoryFile
 import xml.etree.ElementTree as ET
 import io
 import tifffile
@@ -30,42 +28,49 @@ with tab_inputs:
     
     with col_rs:
         st.markdown("### 🛰️ ملفات الاستشعار عن بعد الحقيقية (GeoTIFF / CSV)")
-        dem_file = st.file_uploader("نموذج الارتفاع الرقمي (DEM - GeoTIFF)", type=["tif", "tiff"], key="dem_input")
-        thermal_file = st.file_uploader("الصورة الحرارية / LST (GeoTIFF)", type=["tif", "tiff"], key="thermal_input")
-        radar_file = st.file_uploader("الصورة الرادارية / SAR (GeoTIFF)", type=["tif", "tiff"], key="radar_input")
+        dem_file = st.file_uploader("نموذج الارتفاع الرقمي (DEM - GeoTIFF أو CSV)", type=["tif", "tiff", "csv"], key="dem_input")
+        thermal_file = st.file_uploader("الصورة الحرارية / LST (GeoTIFF أو CSV)", type=["tif", "tiff", "csv"], key="thermal_input")
+        radar_file = st.file_uploader("الصورة الرادارية / SAR (GeoTIFF أو CSV)", type=["tif", "tiff", "csv"], key="radar_input")
 
     with col_ves:
         st.markdown("### ⚡ بيانات الجسات الجيوكهربائية (VES)")
         ves_file = st.file_uploader("ملف الجسات (Excel/CSV)", type=["xlsx", "xls", "csv"], key="ves_input")
 
-    # معالجة ملف DEM الحقيقي إذا تم رفعه
-    dem_raster = None
-    dem_bounds = None
+    # قراءة ملف DEM الجغرافي الحقيقي بواسطة tifffile بدلاً من rasterio
     if dem_file is not None:
         try:
-            with MemoryFile(dem_file.read()) as memfile:
-                with memfile.open() as src:
-                    dem_raster = src.read(1)
-                    dem_bounds = src.bounds
-                    dem_transform = src.transform
-                    dem_crs = src.crs
-            st.success(f"✅ تم قراءة ملف DEM بنجاح! الأبعاد: {dem_raster.shape}, الحدود: {dem_bounds}")
-            st.session_state['dem_raster'] = dem_raster
-            st.session_state['dem_bounds'] = dem_bounds
+            if dem_file.name.endswith(('.tif', '.tiff')):
+                # قراءة البكسلات المباشرة من GeoTIFF
+                dem_bytes = dem_file.read()
+                dem_raster = tifffile.imread(io.BytesIO(dem_bytes))
+                
+                # إذا كانت الصورة متعددة القنوات تأخذ القناة الأولى
+                if dem_raster.ndim > 2:
+                    dem_raster = dem_raster[:, :, 0]
+                    
+                st.success(f"✅ تم قراءة مصفوفة DEM الحقيقية بنجاح! الأبعاد: {dem_raster.shape[1]}x{dem_raster.shape[0]} بكسل")
+                st.session_state['dem_raster'] = dem_raster
+            elif dem_file.name.endswith('.csv'):
+                df_dem = pd.read_csv(dem_file)
+                st.session_state['df_dem'] = df_dem
+                st.success("✅ تم قراءة جدول DEM بنجاح.")
         except Exception as e:
-            st.error(f"خطأ في قراءة ملف DEM GeoTIFF: {e}")
+            st.error(f"خطأ في قراءة ملف DEM: {e}")
 
-    # قراءة الجسات
+    # قراءة بيانات الجسات
     if ves_file is not None:
-        if ves_file.name.endswith(('.xlsx', '.xls')):
-            df_raw = pd.read_excel(ves_file)
-        else:
-            df_raw = pd.read_csv(ves_file)
-        st.session_state['df_raw'] = df_raw
-        st.success("✅ تم تحميل ملف الجسات الميدانية.")
+        try:
+            if ves_file.name.endswith(('.xlsx', '.xls')):
+                df_raw = pd.read_excel(ves_file)
+            else:
+                df_raw = pd.read_csv(ves_file)
+            st.session_state['df_raw'] = df_raw
+            st.success("✅ تم تحميل ملف الجسات الميدانية بنجاح.")
+        except Exception as e:
+            st.error(f"خطأ في قراءة ملف الجسات: {e}")
 
 # ---------------------------------------------------------
-# TAB 2 & 3: المعالجة والتحليل الحقيقي
+# TAB 2: المعالجة والتحليل الحقيقي
 # ---------------------------------------------------------
 with tab_processing:
     st.subheader("⚙️ ضبط خوارزميات التحليل المكانية والهيدرولوجية")
@@ -79,75 +84,76 @@ with tab_processing:
         
     with col_w2:
         smooth_factor = st.slider("معامل تنعيم الانحرافات (Gaussian Filter)", 0.0, 3.0, 1.0)
+        utm_zone = st.number_input("نظام الإسقاط UTM Zone:", value=38)
         btn_run = st.button("🚀 تشغيل الدمج الميداني الحقيقي", type="primary")
 
-    # معالجة بيانات DEM وتوليد شبكة التصريف المائي الحقيقية
+    # تنفيذ تحليل الارتفاع والتصريف المائي من الشبكة الحقيقية المرفوعة
     if 'dem_raster' in st.session_state:
         dem_data = st.session_state['dem_raster'].astype(float)
-        bounds = st.session_state['dem_bounds']
         
-        # استبدال قيم NoData
-        dem_data[dem_data < -9000] = np.nanquantile(dem_data, 0.01)
+        # تنظيف القيم الشاذة أو NoData
+        valid_mask = (dem_data > -9000) & (dem_data < 9000)
+        if not np.any(valid_mask):
+            dem_data = np.nan_to_num(dem_data, nan=0.0)
+        else:
+            min_val = np.min(dem_data[valid_mask])
+            dem_data[~valid_mask] = min_val
         
-        # حساب الانحدار وتراكم الجريان السطحي الفعلي
+        # حساب الانحدار وتراكم الجريان السطحي الفعلي (Flow Accumulation Proxy)
         dy, dx = np.gradient(dem_data)
         slope = np.sqrt(dx**2 + dy**2)
         
-        # تقريب لتراكم الجريان المائي عبر تجميع الانحدارات المنخفضة
-        flow_acc = gaussian_filter(1.0 / (slope + 0.01), sigma=2.0)
+        # استخراج المدارات والوديان المنخفضة عبر مقلوب الانحدار مع الفلترة
+        flow_acc = gaussian_filter(1.0 / (slope + 0.001), sigma=2.0)
         
-        # تحويل القراءات إلى مقياس من 0 إلى 1
-        dem_norm = 1.0 - (dem_data - np.nanmin(dem_data)) / (np.nanmax(dem_data) - np.nanmin(dem_data) + 1e-6)
-        flow_norm = (flow_acc - np.nanmin(flow_acc)) / (np.nanmax(flow_acc) - np.nanmin(flow_acc) + 1e-6)
+        # تطبيث قيم معيارية من 0 إلى 1
+        dem_norm = 1.0 - (dem_data - np.min(dem_data)) / (np.ptp(dem_data) if np.ptp(dem_data) != 0 else 1.0)
+        flow_norm = (flow_acc - np.min(flow_acc)) / (np.ptp(flow_acc) if np.ptp(flow_acc) != 0 else 1.0)
         
-        # حساب الخريطة النهائية المدمجة
+        # معالجة المؤشر المدمج
         gwpi = (w_dem * dem_norm) + (w_drain * flow_norm)
         if smooth_factor > 0:
             gwpi = gaussian_filter(gwpi, sigma=smooth_factor)
             
-        gwpi_score = (gwpi - np.nanmin(gwpi)) / (np.nanmax(gwpi) - np.nanmin(gwpi) + 1e-6) * 100.0
+        gwpi_score = (gwpi - np.min(gwpi)) / (np.ptp(gwpi) if np.ptp(gwpi) != 0 else 1.0) * 100.0
         
         st.session_state['gwpi_score'] = gwpi_score
-        st.session_state['grid_x'] = np.linspace(bounds.left, bounds.right, dem_data.shape[1])
-        st.session_state['grid_y'] = np.linspace(bounds.bottom, bounds.top, dem_data.shape[0])
+        st.session_state['dem_shape'] = dem_data.shape
 
 # ---------------------------------------------------------
 # TAB 3: الخرائط الحقيقية المخرجة
 # ---------------------------------------------------------
 with tab_outputs:
-    st.subheader("🗺️ المخرجات الحقيقية المشتقة من الصور والبيانات المرفوعة")
+    st.subheader("🗺️ المخرجات الحقيقية المشتقة من البيانات المرفوعة")
     
     if 'gwpi_score' in st.session_state:
         score_map = st.session_state['gwpi_score']
-        gx = st.session_state['grid_x']
-        gy = st.session_state['grid_y']
+        h, w = score_map.shape
         
-        # استخراج نقطة أعلى تركيز حقيقية
-        max_idx = np.unravel_index(np.nanargmax(score_map), score_map.shape)
-        target_x = gx[max_idx[1]]
-        target_y = gy[max_idx[0]]
+        # استخراج نقطة أعلى تركيز حقيقية في شبكة البكسلات
+        max_idx = np.unravel_index(np.argmax(score_map), score_map.shape)
+        target_y_pixel = max_idx[0]
+        target_x_pixel = max_idx[1]
         max_val = score_map[max_idx]
 
-        st.markdown(f"### 🎯 الموقع الدقيق المستهدف للحفر: X = `{target_x:.2f}`, Y = `{target_y:.2f}` (نسبة الاحتمالية: `{max_val:.1f}%`)")
+        st.markdown(f"### 🎯 موقع أعلى تركيز للمياه المكتشف: البكسل (`X: {target_x_pixel}`, `Y: {target_y_pixel}`) | نسبة الاحتمالية: `{max_val:.1f}%`")
         
         fig_real = px.imshow(
             score_map,
-            x=gx,
-            y=gy,
-            origin='lower',
             color_continuous_scale='Spectral',
-            title="خريطة احتمالية وتجمع المياه الجوفية المشتقة حقيقياً من ملف GeoTIFF المرفوع"
+            title="خريطة احتمالية وتجمع المياه الجوفية المشتقة حقيقياً من ملف GeoTIFF المرفوع",
+            labels={'color': 'احتمالية المياه %'}
         )
         
         fig_real.add_trace(go.Scatter(
-            x=[target_x], y=[target_y],
+            x=[target_x_pixel], y=[target_y_pixel],
             mode='markers+text',
-            marker=dict(size=18, color='yellow', symbol='star', line=dict(width=2, color='black')),
+            marker=dict(size=16, color='yellow', symbol='star', line=dict(width=2, color='black')),
             text=["🎯 نقطة الحفر المقترحة"],
             textposition="top center"
         ))
         
-        fig_real.update_layout(xaxis_title="الإحداثي الشرقي (X)", yaxis_title="الإحداثي الشمالي (Y)", height=600)
+        fig_real.update_layout(height=600)
         st.plotly_chart(fig_real, use_container_width=True)
     else:
-        st.warning("⚠️ يرجى رفع ملف DEM (GeoTIFF) في التاب الأول والضغط على زر التشغيل لمعالجة البيانات الحقيقية.")
+        st.info("💡 يرجى رفع ملف GeoTIFF للـ DEM في التاب الأول لبدء المعالجة واستخراج الخريطة.")
