@@ -21,7 +21,7 @@ tab_inputs, tab_model, tab_3d_strat, tab_export = st.tabs([
     "📥 1. مدخلات البيانات والتطابق المكاني", 
     "🧠 2. محرك التنبؤ والاستقراء (Spatial Machine Regression)", 
     "🧊 3. النمذجة ثلاثية الأبعاد والمقاطع الطباقية (3D Stratigraphy)",
-    "🗺️ 4. الخرائط التنبؤية المتقدمة والتصدير"
+    "🗺️ 4. الخرائط التنبؤية المتقدمة والتصدير الميداني"
 ])
 
 # ---------------------------------------------------------
@@ -176,6 +176,8 @@ with tab_model:
     st.session_state['aquifer_bottom_z'] = aquifer_bottom_z
     st.session_state['grid_X'] = grid_X
     st.session_state['grid_Y'] = grid_Y
+    st.session_state['gx'] = gx
+    st.session_state['gy'] = gy
     st.session_state['ves_clean'] = ves_clean
     st.session_state['col_x'] = col_x
     st.session_state['col_y'] = col_y
@@ -217,7 +219,7 @@ with tab_3d_strat:
             colorscale='YlOrBr', opacity=0.45, showscale=False, name='قاعدة الخزان (الأساس)'
         ))
 
-        # 4. إضافة أسهم/نقاط الجسات الميدانية
+        # 4. إضافة نقاط الجسات الميدانية
         fig_3d.add_trace(go.Scatter3d(
             x=ves_clean[col_x], y=ves_clean[col_y], z=ves_clean[col_z],
             mode='markers+text',
@@ -239,7 +241,7 @@ with tab_3d_strat:
         st.markdown("### 📐 مقطع طولي تنبؤي لمسار المجرى الجوفي (Hydrogeological Dynamic Cross-Section)")
 
         # استخراج مقطع طولي عبر الوادي (وسط الشبكة)
-        mid_idx = ny // 2
+        mid_idx = dem_data.shape[0] // 2
         section_x = st.session_state['grid_X'][mid_idx, :]
         section_topo = st.session_state['surface_z'][mid_idx, :]
         section_wt = st.session_state['water_table_z'][mid_idx, :]
@@ -257,20 +259,22 @@ with tab_3d_strat:
         st.plotly_chart(fig_section, use_container_width=True)
 
 # ---------------------------------------------------------
-# TAB 4: الخرائط التنبؤية المتقدمة والتصدير
+# TAB 4: الخرائط التنبؤية المتقدمة والتصدير الميداني
 # ---------------------------------------------------------
 with tab_export:
-    st.subheader("🗺️ خرائط احتمالية ونطاقات جودة المياه الجوفية الممتدة")
+    st.subheader("🗺️ خرائط التنبؤ الهيدروجيوفيزيائي وتصديرها للإسقاط الميداني")
 
     if 'predicted_res' in st.session_state:
         col_exp1, col_exp2 = st.columns(2)
+        gx = st.session_state['gx']
+        gy = st.session_state['gy']
 
         with col_exp1:
             fig_thick = px.imshow(
                 (st.session_state['water_table_z'] - st.session_state['aquifer_bottom_z']),
                 x=gx, y=gy, origin='lower',
                 color_continuous_scale='Viridis',
-                title="خريطة سمك الطبقة الحاملة للتكوين (Aquifer Thickness Map - m)"
+                title="خريطة سمك الطبقة الحاملة (Aquifer Thickness Map - m)"
             )
             st.plotly_chart(fig_thick, use_container_width=True)
 
@@ -279,28 +283,76 @@ with tab_export:
                 st.session_state['predicted_res'],
                 x=gx, y=gy, origin='lower',
                 color_continuous_scale='Jet_r',
-                title="خريطة توزيع المقاومية الكهربائية التنبؤية للطبقة المائية (Ohm.m)"
+                title="خريطة المقاومية التنبؤية للمياه (Ohm.m)"
             )
             st.plotly_chart(fig_res_map, use_container_width=True)
 
         st.markdown("---")
-        st.markdown("### 📥 تصدير نتائج التنبؤ الجيوفيزيائي إلى KML")
+        st.markdown("### 🌍 تصدير الخريطة التنبؤية الكاملة للإسقاط الميداني (Google Earth / AlpineQuest)")
 
-        def export_kml(df, cx, cy):
+        # دالة تصدير الخريطة التنبؤية مساحياً كشبكة مضلعات KML ملونة ومطابقة للموقع
+        def export_full_predictive_kml(grid_X, grid_Y, pred_data, step=3):
             kml = ET.Element('kml', xmlns="http://www.opengis.net/kml/2.2")
             doc = ET.SubElement(kml, 'Document')
-            folder = ET.SubElement(doc, 'Folder')
-            ET.SubElement(folder, 'name').text = "نقاط الجسات الميدانية"
-            for idx, r in df.iterrows():
-                pm = ET.SubElement(folder, 'Placemark')
-                ET.SubElement(pm, 'name').text = f"VES Point #{idx+1}"
-                ET.SubElement(ET.SubElement(pm, 'Point'), 'coordinates').text = f"{r[cx]},{r[cy]},0"
+            ET.SubElement(doc, 'name').text = "Predictive Resistivity Map"
+            
+            min_v, max_v = np.nanmin(pred_data), np.nanmax(pred_data)
+            rows, cols = pred_data.shape
+            
+            # مجلد المضلعات التنبؤية
+            folder_polys = ET.SubElement(doc, 'Folder')
+            ET.SubElement(folder_polys, 'name').text = "تغطية الخريطة التنبؤية (Grid Overlay)"
+
+            for i in range(0, rows - step, step):
+                for j in range(0, cols - step, step):
+                    val = pred_data[i, j]
+                    if np.isnan(val): continue
+                    
+                    # تحويل درجة المقاومية إلى لون شفاف (Jet Colorscale Simulation)
+                    norm_val = (val - min_v) / (max_v - min_v + 1e-6)
+                    r = int(255 * (1.0 - norm_val))
+                    b = int(255 * norm_val)
+                    g = int(255 * (1.0 - abs(norm_val - 0.5) * 2))
+                    
+                    # صيغة اللون في KML هي alpha-blue-green-red
+                    color_hex = f"aa{b:02x}{g:02x}{r:02x}"
+                    
+                    style = ET.SubElement(doc, 'Style', id=f"s_{i}_{j}")
+                    polystyle = ET.SubElement(style, 'PolyStyle')
+                    ET.SubElement(polystyle, 'color').text = color_hex
+                    ET.SubElement(polystyle, 'outline').text = "0"
+
+                    pm = ET.SubElement(folder_polys, 'Placemark')
+                    ET.SubElement(pm, 'styleUrl').text = f"#s_{i}_{j}"
+                    
+                    x1, x2 = grid_X[i, j], grid_X[min(i+step, rows-1), min(j+step, cols-1)]
+                    y1, y2 = grid_Y[i, j], grid_Y[min(i+step, rows-1), min(j+step, cols-1)]
+                    
+                    poly = ET.SubElement(pm, 'Polygon')
+                    boundary = ET.SubElement(poly, 'outerBoundaryIs')
+                    ring = ET.SubElement(boundary, 'LinearRing')
+                    ET.SubElement(ring, 'coordinates').text = f"{x1},{y1},0 {x2},{y1},0 {x2},{y2},0 {x1},{y2},0 {x1},{y1},0"
+
+            # مجلد نقاط الجسات الأصلية
+            folder_pts = ET.SubElement(doc, 'Folder')
+            ET.SubElement(folder_pts, 'name').text = "نقاط الجسات الميدانية"
+            for idx, r in ves_clean.iterrows():
+                pm_pt = ET.SubElement(folder_pts, 'Placemark')
+                ET.SubElement(pm_pt, 'name').text = f"VES-{idx+1}"
+                ET.SubElement(ET.SubElement(pm_pt, 'Point'), 'coordinates').text = f"{r[col_x]},{r[col_y]},0"
+
             return ET.tostring(kml, encoding='utf-8')
 
+        kml_full_data = export_full_predictive_kml(
+            st.session_state['grid_X'], 
+            st.session_state['grid_Y'], 
+            st.session_state['predicted_res']
+        )
+
         st.download_button(
-            label="🌍 تحميل خريطة الأهداف إلى Google Earth (KML)",
-            data=export_kml(ves_clean, col_x, col_y),
-            file_name="HydroGeo_Extrapolated_Targets.kml",
+            label="📲 تحميل الخريطة التنبؤية المباشرة (Full Grid KML) لـ Google Earth / AlpineQuest",
+            data=kml_full_data,
+            file_name="Full_Predictive_Resistivity_Map.kml",
             mime="application/vnd.google-earth.kml+xml",
             type="primary"
         )
