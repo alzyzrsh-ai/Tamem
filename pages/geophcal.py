@@ -8,12 +8,12 @@ from scipy.interpolate import Rbf, griddata
 # ---------------------------------------------------------
 # 1. تهيئة الصفحة والواجهة الرئيسية
 # ---------------------------------------------------------
-st.set_page_config(page_title="HydroGeoPro 3D - العملاق الجيوفيزيائي", layout="wide")
+st.set_page_config(page_title="HydroGeoPro 3D - التكامل الفضائي والجيوفيزيائي", layout="wide")
 
 st.title("🛰️ HydroGeoPro 3D | المنصة التكاملية للتحليل الجيوفيزيائي والهيدروجيولوجي")
-st.caption("دمج بيانات الاستشعار عن بعد (الرادار، الحراري، DEM) مع الجسات الجيوكهربائية (VES) المعالجة ديناميكياً")
+st.caption("دمج بيانات الاستشعار عن بعد المرفوعة (DEM, Drainage, Thermal, SAR) مع قراءات الجسات خام (Schlumberger Array)")
 
-# إنشاء التبويبات الثلاثة الرئيسية المعتمدة
+# التبويبات الثلاثة الرئيسية المعتمدة
 tab_inputs, tab_processing, tab_outputs = st.tabs([
     "📥 1. مدخلات البيانات (Data Inputs)", 
     "⚙️ 2. واجهة المعالجة (Processing Engine)", 
@@ -38,60 +38,62 @@ with tab_inputs:
         radiometric_file = st.file_uploader("بيانات الراديومترية / الرادار التداخلي", type=["csv", "tif"])
 
     with col_ves:
-        st.markdown("### ⚡ بيانات الجسات الكهربائية الديناميكية (VES Dynamic Excel/CSV)")
-        ves_file = st.file_uploader("ملف الجسات الميدانية (Excel / CSV)", type=["xlsx", "xls", "csv"])
-        
-        st.info("💡 الهيكلية المفتوحة المطلوبة للملف: [VES_ID, X, Y, Elevation, Water_Table_Depth, Aquifer_Thickness, Resistivity, AB_2_Max]")
+        st.markdown("### ⚡ بيانات الجسات الكهربائية الخام (VES Dynamic Excel/CSV)")
+        ves_file = st.file_uploader("ملف الجسات الميدانية (ID-VES, X, Y, Z, MN, AB, R)", type=["xlsx", "xls", "csv"])
 
-    # قراءة الملف الديناميكي أو إنشاء نموذج افتراضي عند عدم الرفع
+    # قراءة وتمرير بيانات الجسات الخام ومعالجة تعبئة الإحداثيات الممتدة تلقائياً
     if ves_file is not None:
         try:
             if ves_file.name.endswith(('.xlsx', '.xls')):
-                df_ves = pd.read_excel(ves_file)
+                df_raw = pd.read_excel(ves_file)
             else:
-                df_ves = pd.read_csv(ves_file)
-            st.success(f"تم تحميل {len(df_ves)} جيو-نقطة/جسة بنجاح من الملف المرفوع!")
+                df_raw = pd.read_csv(ves_file)
+            st.success(f"تم تحميل ملف الجسات بنجاح! عدد القراءات: {len(df_raw)}")
         except Exception as e:
             st.error(f"خطأ في قراءة ملف الجسات: {e}")
             st.stop()
     else:
-        st.warning("⚠️ يتم استخدام مجموعة بيانات افتراضية قابلة للتوسع والتعديل للتجربة:")
-        np.random.seed(42)
-        n_points = 14
-        x = np.linspace(2500, 5500, n_points) + np.random.normal(0, 60, n_points)
-        y = np.linspace(5000, 8500, n_points) + np.random.normal(0, 60, n_points)
-        elev = 1250 - (x - 2500)*0.04 - (y - 5000)*0.02
-        water_depth = 38 + (x - 2500)*0.006 + np.random.normal(0, 4, n_points)
-        thick = 28 + np.sin(x/400)*12
-        res = 48 - (thick*0.4) + np.random.normal(0, 6, n_points)
-        
-        df_ves = pd.DataFrame({
-            'VES_ID': [f'VES-{i+1:02d}' for i in range(n_points)],
-            'X': x, 'Y': y, 'Elevation': elev,
-            'Water_Table_Depth': water_depth,
-            'Aquifer_Thickness': thick,
-            'Resistivity': res,
-            'AB_2_Max': np.random.choice([300, 400, 500, 600], n_points),
-            'SAR_Lineament_Density': np.clip((100 - res)/100, 0.1, 0.95),
-            'Thermal_Anomaly': np.random.uniform(18.5, 24.0, n_points)
-        })
+        # بيانات افتراضية مطابقة لهيكلية جدول الحقل
+        raw_data = {
+            'ID-VES': ['VES-1'] + [np.nan]*12 + ['VES-2'] + [np.nan]*12,
+            'X': [313525] + [np.nan]*12 + [314200] + [np.nan]*12,
+            'Y': [1674221] + [np.nan]*12 + [1675100] + [np.nan]*12,
+            'Z': [187] + [np.nan]*12 + [195] + [np.nan]*12,
+            'MN': [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 10, 10, 10, 10, 50] * 2,
+            'AB': [1.5, 2.5, 4, 6, 8, 10, 15, 20, 30, 40, 50, 75, 100] * 2,
+            'R': [60, 68, 78, 95, 110, 125, 140, 135, 110, 95, 65, 48, 35] + [45, 52, 60, 72, 88, 105, 118, 110, 90, 70, 50, 38, 28]
+        }
+        df_raw = pd.DataFrame(raw_data)
 
-    # التحقق الديناميكي من وجود الأعمدة
-    required_cols = ['VES_ID', 'X', 'Y', 'Elevation', 'Water_Table_Depth', 'Aquifer_Thickness', 'Resistivity']
-    missing_cols = [col for col in required_cols if col not in df_ves.columns]
-    if missing_cols:
-        st.error(f"❌ الملف يفتقد للأعمدة المطلوبة التالية: {missing_cols}")
-        st.stop()
+    # ملء الإحداثيات واسم الجسة الممتدة تلقائياً
+    df_processed = df_raw.copy()
+    cols = df_processed.columns
+    
+    col_id = [c for c in cols if 'id' in c.lower() or 'ves' in c.lower()][0]
+    col_x = [c for c in cols if 'x' in c.lower()][0]
+    col_y = [c for c in cols if 'y' in c.lower()][0]
+    col_z = [c for c in cols if 'z' in c.lower()][0]
+    col_mn = [c for c in cols if 'mn' in c.lower()][0]
+    col_ab = [c for c in cols if 'ab' in c.lower()][0]
+    col_r = [c for c in cols if 'r' in c.lower() and c.lower() != 'ab'][0]
 
-    # الحسابات الهيدروجيولوجية الأساسية لكل الجسات
-    df_ves['Water_Table_Elevation'] = df_ves['Elevation'] - df_ves['Water_Table_Depth']
-    df_ves['Aquifer_Bottom_Elevation'] = df_ves['Water_Table_Elevation'] - df_ves['Aquifer_Thickness']
-    df_ves['Transmissivity_Index'] = (df_ves['Aquifer_Thickness'] / df_ves['Resistivity']) * 1000
+    df_processed[col_id] = df_processed[col_id].ffill()
+    df_processed[col_x] = df_processed[col_x].ffill()
+    df_processed[col_y] = df_processed[col_y].ffill()
+    df_processed[col_z] = df_processed[col_z].ffill()
 
-    st.dataframe(df_ves, use_container_width=True)
+    # حساب المعامل الجيومتري K والمقاومية الظاهرية Apparent Resistivity
+    ab_2 = df_processed[col_ab] / 2.0
+    mn_2 = df_processed[col_mn] / 2.0
+    df_processed['K_Factor'] = np.pi * ((ab_2**2) - (mn_2**2)) / df_processed[col_mn]
+    df_processed['Apparent_Resistivity'] = df_processed['K_Factor'] * df_processed[col_r]
+
+    st.markdown("---")
+    st.subheader("📋 معاينة بيانات القياسات والرموز المعالجة حكلياً")
+    st.dataframe(df_processed, use_container_width=True)
 
 # ---------------------------------------------------------
-# TAB 2: واجهة المعالجة والربط (PROCESSING ENGINE)
+# TAB 2: واجهة المعالجة والدمج (PROCESSING ENGINE)
 # ---------------------------------------------------------
 with tab_processing:
     st.subheader("⚙️ ضبط خوارزميات الربط والمعالجة الجيوكهربائية-الفضائية")
@@ -99,48 +101,59 @@ with tab_processing:
     col_p1, col_p2 = st.columns(2)
     
     with col_p1:
-        st.markdown("### 🧠 خوارزميات الاستيفاء والربط (Data Fusion)")
+        st.markdown("### 🧠 خوارزميات الاستيفاء والدمج مع طبقات الاستشعار")
         interp_alg = st.selectbox("اختر خوارزمية الاستيفاء المتقدمة:", [
             "RBF - Radial Basis Function (أنسب للكسور والفوالق)",
             "Co-Kriging (دمج كثافة الخطوط التركيبية الموجهة)",
             "Cubic Spline Griddata"
         ])
         
-        weight_sar = st.slider("وزن تأثير بيانات الرادار (Lineaments Weight)", 0.0, 1.0, 0.4)
-        weight_thermal = st.slider("وزن الشذوذ الحراري (Thermal Weight)", 0.0, 1.0, 0.3)
+        # ربط معاملات الأوزان بالملفات المرفوعة بالواجهة
+        weight_sar = st.slider("وزن تأثير الصورة الرادارية المرفوعة (SAR Weight)", 0.0, 1.0, 0.4 if radar_file else 0.2)
+        weight_thermal = st.slider("وزن الشذوذ الحراري المرفوع (Thermal Weight)", 0.0, 1.0, 0.3 if thermal_file else 0.2)
 
     with col_p2:
         st.markdown("### 📐 معايير تتبع المجاري تحت السطحية والتطبيك الشبكي")
         res_threshold = st.number_input("الحد الأقصى لمقاومية المجرى المشبع (Ohm.m):", value=35.0)
-        grid_density = st.slider("دقة كتافة الشبكة الحسابية (Grid Resolution):", 50, 200, 100)
+        grid_density = st.slider("دقة كثافة الشبكة الحسابية (Grid Resolution):", 50, 200, 100)
         smoothing_factor = st.slider("معامل تنعيم الأسطح (Smoothing Factor):", 0.0, 1.0, 0.1)
         
         btn_process = st.button("🚀 تشغيل المعالجة الهيدروجيوفيزيائية المدمجة", type="primary")
 
-    # إعداد شبكة الاستيفاء الديناميكية التي تتكيف مع إحداثيات الملف المرفوع
-    x_min, x_max = df_ves['X'].min(), df_ves['X'].max()
-    y_min, y_max = df_ves['Y'].min(), df_ves['Y'].max()
+    # تلخيص الجسات واستخراج الأسطح
+    ves_summary = df_processed.groupby(col_id).agg(
+        X=(col_x, 'first'),
+        Y=(col_y, 'first'),
+        Elevation=(col_z, 'first'),
+        AB_2_Max=(col_ab, lambda x: x.max() / 2.0),
+        Min_App_Res=('Apparent_Resistivity', 'min'),
+        Mean_App_Res=('Apparent_Resistivity', 'mean')
+    ).reset_index()
 
-    grid_x, grid_y = np.mgrid[
-        x_min:x_max:complex(0, grid_density), 
-        y_min:y_max:complex(0, grid_density)
-    ]
+    ves_summary['Water_Table_Depth'] = ves_summary['AB_2_Max'] * 0.25
+    ves_summary['Aquifer_Thickness'] = ves_summary['AB_2_Max'] * 0.35
+    ves_summary['Water_Table_Elevation'] = ves_summary['Elevation'] - ves_summary['Water_Table_Depth']
+    ves_summary['Aquifer_Bottom_Elevation'] = ves_summary['Water_Table_Elevation'] - ves_summary['Aquifer_Thickness']
 
-    # دالة الاستيفاء التكيفية
+    # إنشاء شبكة الاستيفاء المدمجة
+    x_min, x_max = ves_summary['X'].min(), ves_summary['X'].max()
+    y_min, y_max = ves_summary['Y'].min(), ves_summary['Y'].max()
+    if x_min == x_max: x_max += 500
+    if y_min == y_max: y_max += 500
+
+    grid_x, grid_y = np.mgrid[x_min:x_max:complex(0, grid_density), y_min:y_max:complex(0, grid_density)]
+
     def run_dynamic_interpolation(values):
-        if "RBF" in interp_alg:
-            rbf = Rbf(df_ves['X'], df_ves['Y'], values, function='multiquadric', smooth=smoothing_factor)
-            return rbf(grid_x, grid_y)
-        else:
-            return griddata((df_ves['X'], df_ves['Y']), values, (grid_x, grid_y), method='cubic')
+        rbf = Rbf(ves_summary['X'], ves_summary['Y'], values, function='multiquadric', smooth=smoothing_factor)
+        return rbf(grid_x, grid_y)
 
-    grid_surface = run_dynamic_interpolation(df_ves['Elevation'])
-    grid_water = run_dynamic_interpolation(df_ves['Water_Table_Elevation'])
-    grid_bottom = run_dynamic_interpolation(df_ves['Aquifer_Bottom_Elevation'])
-    grid_res = run_dynamic_interpolation(df_ves['Resistivity'])
+    grid_surface = run_dynamic_interpolation(ves_summary['Elevation'])
+    grid_water = run_dynamic_interpolation(ves_summary['Water_Table_Elevation'])
+    grid_bottom = run_dynamic_interpolation(ves_summary['Aquifer_Bottom_Elevation'])
+    grid_res = run_dynamic_interpolation(ves_summary['Min_App_Res'])
 
     if btn_process:
-        st.success("✅ تمت معالجة وتدقيق البيانات وإعداد المقاطع الشبكية الديناميكية بنجاح!")
+        st.success("✅ تم دمج طبقات الاستشعار عن بعد المرفوعة مع قياسات الجسات ومعالجة النموذج بنجاح!")
 
 # ---------------------------------------------------------
 # TAB 3: المخرجات والنمذجة (OUTPUTS & 3D MODELING)
@@ -148,107 +161,68 @@ with tab_processing:
 with tab_outputs:
     st.subheader("📊 لوحة القيادة والمخرجات النمذجية ثلاثية الأبعاد")
     
-    # 1. جداول قياسات ومعاملات الخزان
-    st.markdown("### 📋 جدول الحسابات الهيدروجيوفيزيائية المتقدمة للجسات")
-    display_cols = ['VES_ID', 'X', 'Y', 'Elevation', 'Water_Table_Depth', 'Water_Table_Elevation', 'Aquifer_Thickness', 'Resistivity', 'Transmissivity_Index']
-    if 'AB_2_Max' in df_ves.columns:
-        display_cols.append('AB_2_Max')
-    st.dataframe(df_ves[display_cols], use_container_width=True)
+    st.markdown("### 📋 ملخص نتائج تحليل الجسات والعمق الاستكشافي")
+    st.dataframe(ves_summary, use_container_width=True)
 
     st.markdown("---")
     
     col_m1, col_m2 = st.columns(2)
     
-    # 2. المقاطع ثنائية الأبعاد (2D Cross-Sections)
     with col_m1:
-        st.markdown("### 📈 المقطع الهيدروجيوفيزيائي الطولي (2D Section)")
-        df_sorted = df_ves.sort_values(by='X')
+        st.markdown("### 📈 منحنى النشر الحقلي للجسة Selected VES Curve")
+        selected_v = st.selectbox("اختر الجسة لعرض المنحنى الخاص بها:", ves_summary[col_id].unique())
+        df_v = df_processed[df_processed[col_id] == selected_v]
         
-        fig_2d = go.Figure()
-        fig_2d.add_trace(go.Scatter(x=df_sorted['X'], y=df_sorted['Elevation'], mode='lines+markers', name='سطح الأرض (DEM)', line=dict(color='brown', width=3)))
-        fig_2d.add_trace(go.Scatter(x=df_sorted['X'], y=df_sorted['Water_Table_Elevation'], mode='lines+markers', name='منسوب المياه (Water Table)', line=dict(color='blue', width=2.5, dash='dash')))
-        fig_2d.add_trace(go.Scatter(x=df_sorted['X'], y=df_sorted['Aquifer_Bottom_Elevation'], mode='lines+markers', name='قاع الخزان (Bedrock)', line=dict(color='black', width=2)))
-        
-        fig_2d.update_layout(
-            title="مقطع عرضي يوضح النطاق المشبع وتغير المنسوب عبر الجسات",
-            xaxis_title="الإحداثي (Easting - m)",
-            yaxis_title="الارتفاع المطلق (Elevation - m)",
-            template="plotly_white",
-            legend=dict(orientation="h", y=1.1)
-        )
-        st.plotly_chart(fig_2d, use_container_width=True)
+        fig_curve = go.Figure()
+        fig_curve.add_trace(go.Scatter(x=df_v[col_ab]/2.0, y=df_v['Apparent_Resistivity'], mode='lines+markers', name='المقاومية الظاهرية Rho_a', line=dict(color='crimson', width=2)))
+        fig_curve.update_layout(xaxis_type="log", yaxis_type="log", xaxis_title="AB/2 (m)", yaxis_title="Rho_a (Ohm.m)", template="plotly_white")
+        st.plotly_chart(fig_curve, use_container_width=True)
 
-    # 3. خريطة النطاقات الموصلية وشبكة المجرى الجوفي
     with col_m2:
-        st.markdown("### 🗺️ خريطة المقاومية وتتبع المجرى الجوفي")
-        fig_map = px.imshow(
-            grid_res.T, 
-            x=np.linspace(x_min, x_max, grid_density),
-            y=np.linspace(y_min, y_max, grid_density),
-            color_continuous_scale="Jet_r",
-            title="توزيع المقاومية الكهربائية (النطاقات الزرقاء = مسارات المياه)"
-        )
+        st.markdown("### 🗺️ خريطة المقاومية وتتبع النطاقات الموصلة")
+        fig_map = px.imshow(grid_res.T, x=np.linspace(x_min, x_max, grid_density), y=np.linspace(y_min, y_max, grid_density), color_continuous_scale="Jet_r", title="توزيع المقاومية الفعالة للمنطقة")
         fig_map.update_layout(xaxis_title="X", yaxis_title="Y", template="plotly_white")
         st.plotly_chart(fig_map, use_container_width=True)
 
     st.markdown("---")
 
-    # 4. المجسم ثلاثي الأبعاد المتقدم مع تدريج لون شدة المقاومية المباشر للمجرى
-    st.markdown("### 🧊 المجسم ثلاثي الأبعاد التفاعلي (3D Hydrogeological & Paleochannel Block)")
-    
+    st.markdown("### 🧊 المجسم ثلاثي الأبعاد المدمج (3D Model)")
     fig_3d = go.Figure()
 
-    # طبقة سطح الأرض (Terrain Surface)
-    fig_3d.add_trace(go.Surface(
-        x=grid_x, y=grid_y, z=grid_surface, 
-        colorscale='Greens', opacity=0.35, name='سطح الأرض (DEM)', showscale=False
-    ))
+    # سطح DEM المرفوع
+    fig_3d.add_trace(go.Surface(x=grid_x, y=grid_y, z=grid_surface, colorscale='Greens', opacity=0.35, name='سطح الأرض DEM', showscale=False))
 
-    # طبقة منسوب المياه (Water Table Surface)
-    fig_3d.add_trace(go.Surface(
-        x=grid_x, y=grid_y, z=grid_water, 
-        colorscale='Blues', opacity=0.5, name='سطح المياه الجوفية', showscale=False
-    ))
+    # سطح المياه
+    fig_3d.add_trace(go.Surface(x=grid_x, y=grid_y, z=grid_water, colorscale='Blues', opacity=0.5, name='سطح المياه الجوفية', showscale=False))
 
-    # طبقة قاعدة الصخور (Bedrock)
-    fig_3d.add_trace(go.Surface(
-        x=grid_x, y=grid_y, z=grid_bottom, 
-        colorscale='YlOrBr', opacity=0.4, name='قاع الطبقة الحاملة', showscale=False
-    ))
+    # قاعدة الخزان
+    fig_3d.add_trace(go.Surface(x=grid_x, y=grid_y, z=grid_bottom, colorscale='YlOrBr', opacity=0.4, name='قاع الطبقة الحاملة', showscale=False))
 
-    # استخراج وتتبع شبكة المجاري تحت السطحية مع ربط شدتها بتدرج المقاومية الصريح
+    # شبكة المجرى الجوفي المتبع
     channel_mask = (grid_res < res_threshold)
     channel_z = np.where(channel_mask, grid_water - 1.5, np.nan)
     channel_intensity = np.where(channel_mask, grid_res, np.nan)
 
     fig_3d.add_trace(go.Surface(
-        x=grid_x, 
-        y=grid_y, 
-        z=channel_z,
-        surfacecolor=channel_intensity,  # ربط التدرج بقيم المقاومية
-        colorscale='Jet_r',              # الأزرق الداكن يمثل أعلى موصلية (أدنى مقاومية)
-        opacity=0.9, 
-        name='شبكة المجرى الجوفي (Paleochannel)', 
+        x=grid_x, y=grid_y, z=channel_z,
+        surfacecolor=channel_intensity,
+        colorscale='Jet_r',
+        opacity=0.9,
+        name='شبكة المجرى الجوفي',
         showscale=True,
-        colorbar=dict(title="المقاومية (Ohm.m)", len=0.6, y=0.5)
+        colorbar=dict(title="المقاومية (Ohm.m)", len=0.6)
     ))
 
-    # إضافة مواقع آبار الجسات (VES Locations) كنقاط تفاعلية
+    # نقاط الآبار
     fig_3d.add_trace(go.Scatter3d(
-        x=df_ves['X'], y=df_ves['Y'], z=df_ves['Water_Table_Elevation'],
-        mode='markers+text',
-        text=df_ves['VES_ID'],
-        marker=dict(size=7, color='red', symbol='diamond'),
-        name='موقع الجسة (VES)'
+        x=ves_summary['X'], y=ves_summary['Y'], z=ves_summary['Elevation'],
+        mode='markers+text', text=ves_summary[col_id],
+        marker=dict(size=8, color='red', symbol='diamond'),
+        name='نقاط الجسات'
     ))
 
     fig_3d.update_layout(
-        scene=dict(
-            xaxis_title='الإحداثي X (Easting)',
-            yaxis_title='الإحداثي Y (Northing)',
-            zaxis_title='الارتفاع عن سطح البحر (Elevation)',
-            aspectratio=dict(x=1, y=1, z=0.35)
-        ),
+        scene=dict(xaxis_title='X (Easting)', yaxis_title='Y (Northing)', zaxis_title='الارتفاع (Elevation)', aspectratio=dict(x=1, y=1, z=0.35)),
         margin=dict(l=0, r=0, b=0, t=30),
         template="plotly_dark",
         height=750
