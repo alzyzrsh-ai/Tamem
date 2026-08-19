@@ -8,7 +8,50 @@ from scipy.ndimage import gaussian_filter
 import xml.etree.ElementTree as ET
 import io
 import tifffile
-import pyproj
+import math
+
+# ---------------------------------------------------------
+# دالة تحويل رياضية من UTM إلى WGS84 (Lat/Lon) بدون مكتبات خارجية
+# ---------------------------------------------------------
+def utm_to_wgs84(easting, northing, zone=38, northern_hemisphere=True):
+    a = 6378137.0  # WGS84 semi-major axis
+    f = 1 / 298.257223563  # WGS84 flattening
+    b = a * (1 - f)
+    e2 = (a**2 - b**2) / a**2
+    e_prime2 = (a**2 - b**2) / b**2
+    
+    k0 = 0.9996
+    x = easting - 500000.0
+    y = northing if northern_hemisphere else northing - 10000000.0
+    
+    lon0 = (zone - 1) * 6 - 180 + 3
+    lon0_rad = math.radians(lon0)
+    
+    M = y / k0
+    mu = M / (a * (1 - e2/4 - 3*e2**2/64 - 5*e2**3/256))
+    
+    e1 = (1 - math.sqrt(1 - e2)) / (1 + math.sqrt(1 - e2))
+    
+    phi1 = (mu + (3*e1/2 - 27*e1**3/32)*math.sin(2*mu) + 
+            (21*e1**2/16 - 55*e1**4/32)*math.sin(4*mu) + 
+            (151*e1**3/96)*math.sin(6*mu))
+    
+    N1 = a / math.sqrt(1 - e2 * math.sin(phi1)**2)
+    T1 = math.tan(phi1)**2
+    C1 = e_prime2 * math.cos(phi1)**2
+    R1 = a * (1 - e2) / ((1 - e2 * math.sin(phi1)**2)**1.5)
+    D = x / (N1 * k0)
+    
+    lat = phi1 - (N1 * math.tan(phi1) / R1) * (
+        D**2/2 - (5 + 3*T1 + 10*C1 - 4*C1**2 - 9*e_prime2)*D**4/24 + 
+        (61 + 90*T1 + 298*C1 + 45*T1**2 - 252*e_prime2 - 3*C1**2)*D**6/720
+    )
+    lon = lon0_rad + (
+        D - (1 + 2*T1 + C1)*D**3/6 + 
+        (5 - 2*C1 + 28*T1 - 3*C1**2 + 8*e_prime2 + 24*T1**2)*D**5/120
+    ) / math.cos(phi1)
+    
+    return math.degrees(lon), math.degrees(lat)
 
 # ---------------------------------------------------------
 # 1. إعدادات الصفحة والتهيئة
@@ -82,7 +125,7 @@ with tab_inputs:
     st.dataframe(st.session_state['df_raw'], use_container_width=True)
 
 # ---------------------------------------------------------
-# TAB 2: محرك التنبؤ والاستقراء المكانى
+# TAB 2: محرك التنبؤ والاستقراء المكاني
 # ---------------------------------------------------------
 with tab_model:
     st.subheader("🧠 استقراء سلوك الطبقات العميقة بناءً على مؤشرات السطح")
@@ -188,23 +231,15 @@ with tab_export:
         col_proj1, col_proj2 = st.columns(2)
         
         with col_proj1:
-            st.markdown("### 🌐 تحديد نظام الإحداثيات الميداني (CRS Setup)")
-            utm_zone = st.number_input("رقم نطاق UTM (مثلاً 38 لليمن ومعظم الجزيرة العربية):", min_value=1, max_value=60, value=38)
-            utm_hemisphere = st.radio("النصف الكروي:", ["North (شمال الخط)", "South (جنوب الخط)"], index=0)
-            
-            # بناء معرف نظام EPSG للتحويل إلى WGS84
-            epsg_code = 32600 + utm_zone if "North" in utm_hemisphere else 32700 + utm_zone
-            st.info(f"نظام الإحداثيات المُختار للتحويل: EPSG:{epsg_code} -> EPSG:4326 (WGS84 Lat/Lon)")
+            st.markdown("### 🌐 تحديد نظام الإحداثيات الميداني")
+            utm_zone = st.number_input("رقم نطاق UTM (مثلاً 38 لليمن ورأس المعزاب/الجوف/صنعاء):", min_value=1, max_value=60, value=38)
+            is_northern = st.checkbox("النصف الشمالي من الكرة الأرضية (Northern Hemisphere)", value=True)
 
         with col_proj2:
             st.markdown("### 🛠️ معايير تصدير KML الميداني")
             grid_resolution = st.slider("دقة الشبكة المصدّرة (دقة أعلى = ملف أكبر):", 1, 6, 3)
 
-        # دالة محرك تحويل الإحداثيات من UTM إلى Lat/Lon وبناء ملف KML الصحيح
-        def generate_accurate_kml(grid_X, grid_Y, pred_data, ves_df, cx, cy, epsg_in, step=3):
-            # محول الإحداثيات من UTM إلى WGS84 (Lat/Lon)
-            transformer = pyproj.Transformer.from_crs(f"EPSG:{epsg_in}", "EPSG:4326", always_xy=True)
-            
+        def generate_accurate_kml(grid_X, grid_Y, pred_data, ves_df, cx, cy, zone, is_north, step=3):
             kml = ET.Element('kml', xmlns="http://www.opengis.net/kml/2.2")
             doc = ET.SubElement(kml, 'Document')
             ET.SubElement(doc, 'name').text = "HydroGeo Predictive Map (Georeferenced)"
@@ -215,7 +250,6 @@ with tab_export:
             folder_polys = ET.SubElement(doc, 'Folder')
             ET.SubElement(folder_polys, 'name').text = "تغطية خريطة المقاومية التنبؤية"
 
-            # 1. تحويل ورسم شبكة التنبؤ الفضائية
             for i in range(0, rows - step, step):
                 for j in range(0, cols - step, step):
                     val = pred_data[i, j]
@@ -236,15 +270,14 @@ with tab_export:
                     pm = ET.SubElement(folder_polys, 'Placemark')
                     ET.SubElement(pm, 'styleUrl').text = f"#s_{i}_{j}"
                     
-                    # الإحداثيات المتراكبة بـ UTM
                     x1, x2 = grid_X[i, j], grid_X[min(i+step, rows-1), min(j+step, cols-1)]
                     y1, y2 = grid_Y[i, j], grid_Y[min(i+step, rows-1), min(j+step, cols-1)]
                     
-                    # التحويل الفعلي للزوايا الأربع إلى Lat/Lon
-                    lon1, lat1 = transformer.transform(x1, y1)
-                    lon2, lat2 = transformer.transform(x2, y1)
-                    lon3, lat3 = transformer.transform(x2, y2)
-                    lon4, lat4 = transformer.transform(x1, y2)
+                    # التحويل المباشر دون الاعتماد على مكتبات إضافية
+                    lon1, lat1 = utm_to_wgs84(x1, y1, zone=zone, northern_hemisphere=is_north)
+                    lon2, lat2 = utm_to_wgs84(x2, y1, zone=zone, northern_hemisphere=is_north)
+                    lon3, lat3 = utm_to_wgs84(x2, y2, zone=zone, northern_hemisphere=is_north)
+                    lon4, lat4 = utm_to_wgs84(x1, y2, zone=zone, northern_hemisphere=is_north)
 
                     poly = ET.SubElement(pm, 'Polygon')
                     boundary = ET.SubElement(poly, 'outerBoundaryIs')
@@ -253,11 +286,10 @@ with tab_export:
                         f"{lon1},{lat1},0 {lon2},{lat2},0 {lon3},{lat3},0 {lon4},{lat4},0 {lon1},{lat1},0"
                     )
 
-            # 2. تحويل ورسم نقاط الجسات
             folder_pts = ET.SubElement(doc, 'Folder')
             ET.SubElement(folder_pts, 'name').text = "مواقع الجسات الميدانية"
             for idx, r in ves_df.iterrows():
-                lon_p, lat_p = transformer.transform(r[cx], r[cy])
+                lon_p, lat_p = utm_to_wgs84(r[cx], r[cy], zone=zone, northern_hemisphere=is_north)
                 pm_pt = ET.SubElement(folder_pts, 'Placemark')
                 ET.SubElement(pm_pt, 'name').text = f"VES-{idx+1}"
                 ET.SubElement(ET.SubElement(pm_pt, 'Point'), 'coordinates').text = f"{lon_p},{lat_p},0"
@@ -266,7 +298,6 @@ with tab_export:
 
         st.markdown("---")
         
-        # إنشاء ملف KML المسقط صحيحاً
         correct_kml_data = generate_accurate_kml(
             st.session_state['grid_X'],
             st.session_state['grid_Y'],
@@ -274,12 +305,13 @@ with tab_export:
             st.session_state['ves_clean'],
             st.session_state['col_x'],
             st.session_state['col_y'],
-            epsg_code,
+            utm_zone,
+            is_northern,
             step=grid_resolution
         )
 
         st.download_button(
-            label="🌍 تحميل الخريطة التنبؤية الموجهة جغرافياً (Correct WGS84 KML) لـ Google Earth / AlpineQuest",
+            label="🌍 تحميل الخريطة التنبؤية الموجهة جغرافياً (Standalone WGS84 KML) لـ Google Earth / AlpineQuest",
             data=correct_kml_data,
             file_name="HydroGeo_RealWorld_Map.kml",
             mime="application/vnd.google-earth.kml+xml",
