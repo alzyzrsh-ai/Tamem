@@ -8,6 +8,7 @@ from scipy.ndimage import gaussian_filter
 import xml.etree.ElementTree as ET
 import io
 import tifffile
+import pyproj
 
 # ---------------------------------------------------------
 # 1. إعدادات الصفحة والتهيئة
@@ -33,14 +34,11 @@ with tab_inputs:
     with col_rs:
         st.markdown("### 🛰️ بيانات الاستشعار عن بعد (Rasters)")
         dem_file = st.file_uploader("نموذج الارتفاع الرقمي (DEM - GeoTIFF)", type=["tif", "tiff"], key="dem_input")
-        thermal_file = st.file_uploader("الصورة الحرارية / LST (GeoTIFF)", type=["tif", "tiff"], key="thermal_input")
-        radar_file = st.file_uploader("الصورة الرادارية / SAR (GeoTIFF)", type=["tif", "tiff"], key="radar_input")
 
     with col_ves:
         st.markdown("### ⚡ بيانات الجسات الجيوكهربائية (VES Soundings)")
         ves_file = st.file_uploader("جدول الجسات (Excel/CSV)", type=["xlsx", "xls", "csv"], key="ves_input")
 
-    # معالجة قراءة GeoTIFF أو إنشاء مصفوفة طوبوغرافية حقيقية افتراضية في حالة عدم الرفع
     if dem_file is not None:
         try:
             dem_data = tifffile.imread(io.BytesIO(dem_file.read()))
@@ -50,7 +48,6 @@ with tab_inputs:
             st.error(f"خطأ في قراءة ملف GeoTIFF: {e}")
             dem_data = None
     else:
-        # إنشاء مصفوفة حوض هيدرولوجي واقعي في حالة عدم رفع ملف DEM
         x_grid = np.linspace(313000, 318000, 100)
         y_grid = np.linspace(1673000, 1678000, 100)
         X, Y = np.meshgrid(x_grid, y_grid)
@@ -59,7 +56,6 @@ with tab_inputs:
 
     st.session_state['dem_raster'] = dem_data
 
-    # معالجة قراءة الجسات الجيوكهربائية
     if ves_file is not None:
         try:
             if ves_file.name.endswith(('.xlsx', '.xls')):
@@ -72,7 +68,6 @@ with tab_inputs:
             st.error(f"خطأ في قراءة ملف الجسات: {e}")
             df_raw = None
     else:
-        # نقاط جسات ميدانية نموذجية في حالة عدم الرفع
         df_raw = pd.DataFrame({
             'ID-VES': [f'VES-{i+1}' for i in range(8)],
             'X': [313500, 314200, 315000, 315800, 316500, 314800, 315500, 316200],
@@ -87,42 +82,34 @@ with tab_inputs:
     st.dataframe(st.session_state['df_raw'], use_container_width=True)
 
 # ---------------------------------------------------------
-# TAB 2: محرك التنبؤ والاستقراء المكاني (معالجة أخطاء None)
+# TAB 2: محرك التنبؤ والاستقراء المكانى
 # ---------------------------------------------------------
 with tab_model:
     st.subheader("🧠 استقراء سلوك الطبقات العميقة بناءً على مؤشرات السطح")
-    
     col_m1, col_m2 = st.columns(2)
     
-    # 1. تنقية وتجهيز الجداول رقمياً بأمان تام
     df_v = st.session_state.get('df_raw', pd.DataFrame()).copy()
-    
-    # محاذاة أسماء الأعمدة الأساسية
     cols = df_v.columns
     col_x = [c for c in cols if any(k in str(c).lower() for k in ['x', 'شرق', 'east'])][0] if any(any(k in str(c).lower() for k in ['x', 'شرق', 'east']) for c in cols) else 'X'
     col_y = [c for c in cols if any(k in str(c).lower() for k in ['y', 'شمال', 'north'])][0] if any(any(k in str(c).lower() for k in ['y', 'شمال', 'north']) for c in cols) else 'Y'
     col_z = [c for c in cols if any(k in str(c).lower() for k in ['z', 'ارتفاع', 'elev'])][0] if any(any(k in str(c).lower() for k in ['z', 'ارتفاع', 'elev']) for c in cols) else 'Z'
 
-    # ملء اسم الجسة وقرائن العمود
     df_v[col_x] = df_v[col_x].ffill()
     df_v[col_y] = df_v[col_y].ffill()
 
-    # تحويل كافة القيم الحسابية إلى أرقام وإلغاء النصوص والأجزاء الفارغة None
     for c in [col_x, col_y, col_z, 'Resistivity_Ohm', 'Aquifer_Depth_m', 'Aquifer_Thickness_m']:
         if c in df_v.columns:
             df_v[c] = pd.to_numeric(df_v[c], errors='coerce')
 
-    # حذف الأسطر التي تحتوي على None أو NaN في الإحداثيات
     ves_clean = df_v.dropna(subset=[col_x, col_y]).copy()
 
-    # إنشاء قيم افتراضية حقلية إذا غابت بعض الأعمدة التنبؤية من الجدول المرفوع
     if 'Resistivity_Ohm' not in ves_clean.columns: ves_clean['Resistivity_Ohm'] = 35.0
     if 'Aquifer_Depth_m' not in ves_clean.columns: ves_clean['Aquifer_Depth_m'] = 25.0
     if 'Aquifer_Thickness_m' not in ves_clean.columns: ves_clean['Aquifer_Thickness_m'] = 40.0
     if col_z not in ves_clean.columns: ves_clean[col_z] = 2000.0
 
     if ves_clean.empty:
-        st.error("⚠️ لم يتم العثور على أرقام إحداثيات صالحة (X, Y) في الملف. يرجى رفع ملف يحتوي على أرقام الإحداثيات.")
+        st.error("⚠️ لم يتم العثور على أرقام إحداثيات صالحة.")
         st.stop()
 
     with col_m1:
@@ -131,28 +118,19 @@ with tab_model:
         slope = np.sqrt(dx**2 + dy**2)
         flow_accumulation = gaussian_filter(1.0 / (slope + 0.005), sigma=3.0)
         
-        # حساب الحدود المكانية المباشرة بأمان بدون خطأ None
         x_min, x_max = float(ves_clean[col_x].min()) - 1000, float(ves_clean[col_x].max()) + 1000
         y_min, y_max = float(ves_clean[col_y].min()) - 1000, float(ves_clean[col_y].max()) + 1000
-        
-        st.success(f"✅ تم تنقية البيانات بنجاح! عدد نقاط الجسات النظيفة: {len(ves_clean)}")
+        st.success(f"✅ تم تنقية البيانات! الجسات الصالحة: {len(ves_clean)}")
 
     with col_m2:
         st.markdown("#### 2. خوارزميات الاستقراء الهيدروجيوفيزيائي")
-        model_type = st.selectbox("اختر نموذج المعايرة الميدانية:", [
-            "RBF - Radial Basis Function Integration",
-            "Multi-Parametric Regression (DEM + Flow -> Resistivity)",
-            "Inverse Distance & Slope Hydro-Weighting"
-        ])
-        corr_weight = st.slider("معامل تأثير شبكة التصريف المائي في النمذجة العمقية:", 0.1, 1.0, 0.65)
+        corr_weight = st.slider("معامل تأثير شبكة التصريف المائي:", 0.1, 1.0, 0.65)
 
-    # بناء الشبكة التنبؤية لعموم الحوض
     ny, nx = dem_data.shape
     gx = np.linspace(x_min, x_max, nx)
     gy = np.linspace(y_min, y_max, ny)
     grid_X, grid_Y = np.meshgrid(gx, gy)
 
-    # التنبؤ الهيدروجيوفيزيائي للطبقات العميقة
     rbf_res = Rbf(ves_clean[col_x], ves_clean[col_y], ves_clean['Resistivity_Ohm'], function='multiquadric', smooth=0.1)
     pred_res_base = rbf_res(grid_X, grid_Y)
     
@@ -165,7 +143,6 @@ with tab_model:
     rbf_thick = Rbf(ves_clean[col_x], ves_clean[col_y], ves_clean['Aquifer_Thickness_m'], function='multiquadric', smooth=0.1)
     predicted_thickness = rbf_thick(grid_X, grid_Y) * (1.0 + (corr_weight * 0.4 * flow_norm))
 
-    # أسطح الارتفاعات للنمذجة ثلاثية الأبعاد
     surface_z = dem_data
     water_table_z = surface_z - predicted_depth
     aquifer_bottom_z = water_table_z - predicted_thickness
@@ -183,138 +160,72 @@ with tab_model:
     st.session_state['col_y'] = col_y
     st.session_state['col_z'] = col_z
 
-    st.success("✅ تم بناء النموذج التنبؤي للحوض بالكامل!")
-
 # ---------------------------------------------------------
-# TAB 3: النمذجة ثلاثية الأبعاد والمقاطع الطباقية (3D Stratigraphy)
+# TAB 3: النمذجة ثلاثية الأبعاد
 # ---------------------------------------------------------
 with tab_3d_strat:
-    st.subheader("🧊 النماذج ثلاثية الأبعاد الحقيقية للطبقات العميقة والمياه")
-
+    st.subheader("🧊 النماذج ثلاثية الأبعاد للطبقات والمياه")
     ves_clean = st.session_state.get('ves_clean', pd.DataFrame())
     col_x = st.session_state.get('col_x', 'X')
     col_y = st.session_state.get('col_y', 'Y')
     col_z = st.session_state.get('col_z', 'Z')
 
     if 'surface_z' in st.session_state:
-        # رسم النموذج 3D المكتمل
         fig_3d = go.Figure()
-
-        # 1. سطح الأرض (DEM)
-        fig_3d.add_trace(go.Surface(
-            x=st.session_state['grid_X'], y=st.session_state['grid_Y'], z=st.session_state['surface_z'],
-            colorscale='Greens', opacity=0.35, showscale=False, name='سطح الأرض'
-        ))
-
-        # 2. منسوب المياه الجوفية التنبؤي (Water Table)
-        fig_3d.add_trace(go.Surface(
-            x=st.session_state['grid_X'], y=st.session_state['grid_Y'], z=st.session_state['water_table_z'],
-            surfacecolor=st.session_state['predicted_res'], colorscale='Jet_r', opacity=0.75,
-            colorbar=dict(title="المقاومية التنبؤية (Ohm.m)"), name='سطح المياه الجوفية'
-        ))
-
-        # 3. قاع الطبقة الحاملة (Aquifer Bedrock)
-        fig_3d.add_trace(go.Surface(
-            x=st.session_state['grid_X'], y=st.session_state['grid_Y'], z=st.session_state['aquifer_bottom_z'],
-            colorscale='YlOrBr', opacity=0.45, showscale=False, name='قاعدة الخزان (الأساس)'
-        ))
-
-        # 4. إضافة نقاط الجسات الميدانية
-        fig_3d.add_trace(go.Scatter3d(
-            x=ves_clean[col_x], y=ves_clean[col_y], z=ves_clean[col_z],
-            mode='markers+text',
-            marker=dict(size=8, color='red', symbol='diamond'),
-            text=ves_clean.index.astype(str), name='مواقع الجسات الميدانية'
-        ))
-
-        fig_3d.update_layout(
-            scene=dict(
-                xaxis_title='X (متر)', yaxis_title='Y (متر)', zaxis_title='الارتفاع Z (متر)',
-                aspectratio=dict(x=1, y=1, z=0.4)
-            ),
-            template="plotly_dark", height=650, margin=dict(l=0, r=0, b=0, t=30)
-        )
-
+        fig_3d.add_trace(go.Surface(x=st.session_state['grid_X'], y=st.session_state['grid_Y'], z=st.session_state['surface_z'], colorscale='Greens', opacity=0.35, showscale=False))
+        fig_3d.add_trace(go.Surface(x=st.session_state['grid_X'], y=st.session_state['grid_Y'], z=st.session_state['water_table_z'], surfacecolor=st.session_state['predicted_res'], colorscale='Jet_r', opacity=0.75))
+        fig_3d.add_trace(go.Scatter3d(x=ves_clean[col_x], y=ves_clean[col_y], z=ves_clean[col_z], mode='markers', marker=dict(size=8, color='red')))
+        fig_3d.update_layout(scene=dict(aspectratio=dict(x=1, y=1, z=0.4)), template="plotly_dark", height=600)
         st.plotly_chart(fig_3d, use_container_width=True)
 
-        st.markdown("---")
-        st.markdown("### 📐 مقطع طولي تنبؤي لمسار المجرى الجوفي (Hydrogeological Dynamic Cross-Section)")
-
-        # استخراج مقطع طولي عبر الوادي (وسط الشبكة)
-        mid_idx = dem_data.shape[0] // 2
-        section_x = st.session_state['grid_X'][mid_idx, :]
-        section_topo = st.session_state['surface_z'][mid_idx, :]
-        section_wt = st.session_state['water_table_z'][mid_idx, :]
-        section_bot = st.session_state['aquifer_bottom_z'][mid_idx, :]
-
-        fig_section = go.Figure()
-        fig_section.add_trace(go.Scatter(x=section_x, y=section_topo, mode='lines', name='سطح الأرض (DEM)', line=dict(color='brown', width=3)))
-        fig_section.add_trace(go.Scatter(x=section_x, y=section_wt, mode='lines', name='سطح المياه الجوفية', line=dict(color='blue', width=2, dash='dash')))
-        fig_section.add_trace(go.Scatter(x=section_x, y=section_bot, mode='lines', name='قاع الطبقة الحاملة', line=dict(color='black', width=2)))
-
-        fig_section.update_layout(
-            title="مقطع هيدروجيولوجي ممتد بناءً على نتائج التنبؤ الميداني والفضائي",
-            xaxis_title="الإحداثي الشرقي (X)", yaxis_title="الارتفاع Z (متر)", height=400, template="plotly_white"
-        )
-        st.plotly_chart(fig_section, use_container_width=True)
-
 # ---------------------------------------------------------
-# TAB 4: الخرائط التنبؤية المتقدمة والتصدير الميداني
+# TAB 4: الخرائط التنبؤية المتقدمة والتصدير الميداني الدقيق
 # ---------------------------------------------------------
 with tab_export:
-    st.subheader("🗺️ خرائط التنبؤ الهيدروجيوفيزيائي وتصديرها للإسقاط الميداني")
+    st.subheader("🗺️ إعدادات الإسقاط وتصدير الخريطة التنبؤية لـ Google Earth")
 
     if 'predicted_res' in st.session_state:
-        col_exp1, col_exp2 = st.columns(2)
-        gx = st.session_state['gx']
-        gy = st.session_state['gy']
+        col_proj1, col_proj2 = st.columns(2)
+        
+        with col_proj1:
+            st.markdown("### 🌐 تحديد نظام الإحداثيات الميداني (CRS Setup)")
+            utm_zone = st.number_input("رقم نطاق UTM (مثلاً 38 لليمن ومعظم الجزيرة العربية):", min_value=1, max_value=60, value=38)
+            utm_hemisphere = st.radio("النصف الكروي:", ["North (شمال الخط)", "South (جنوب الخط)"], index=0)
+            
+            # بناء معرف نظام EPSG للتحويل إلى WGS84
+            epsg_code = 32600 + utm_zone if "North" in utm_hemisphere else 32700 + utm_zone
+            st.info(f"نظام الإحداثيات المُختار للتحويل: EPSG:{epsg_code} -> EPSG:4326 (WGS84 Lat/Lon)")
 
-        with col_exp1:
-            fig_thick = px.imshow(
-                (st.session_state['water_table_z'] - st.session_state['aquifer_bottom_z']),
-                x=gx, y=gy, origin='lower',
-                color_continuous_scale='Viridis',
-                title="خريطة سمك الطبقة الحاملة (Aquifer Thickness Map - m)"
-            )
-            st.plotly_chart(fig_thick, use_container_width=True)
+        with col_proj2:
+            st.markdown("### 🛠️ معايير تصدير KML الميداني")
+            grid_resolution = st.slider("دقة الشبكة المصدّرة (دقة أعلى = ملف أكبر):", 1, 6, 3)
 
-        with col_exp2:
-            fig_res_map = px.imshow(
-                st.session_state['predicted_res'],
-                x=gx, y=gy, origin='lower',
-                color_continuous_scale='Jet_r',
-                title="خريطة المقاومية التنبؤية للمياه (Ohm.m)"
-            )
-            st.plotly_chart(fig_res_map, use_container_width=True)
-
-        st.markdown("---")
-        st.markdown("### 🌍 تصدير الخريطة التنبؤية الكاملة للإسقاط الميداني (Google Earth / AlpineQuest)")
-
-        # دالة تصدير الخريطة التنبؤية مساحياً كشبكة مضلعات KML ملونة ومطابقة للموقع
-        def export_full_predictive_kml(grid_X, grid_Y, pred_data, step=3):
+        # دالة محرك تحويل الإحداثيات من UTM إلى Lat/Lon وبناء ملف KML الصحيح
+        def generate_accurate_kml(grid_X, grid_Y, pred_data, ves_df, cx, cy, epsg_in, step=3):
+            # محول الإحداثيات من UTM إلى WGS84 (Lat/Lon)
+            transformer = pyproj.Transformer.from_crs(f"EPSG:{epsg_in}", "EPSG:4326", always_xy=True)
+            
             kml = ET.Element('kml', xmlns="http://www.opengis.net/kml/2.2")
             doc = ET.SubElement(kml, 'Document')
-            ET.SubElement(doc, 'name').text = "Predictive Resistivity Map"
-            
+            ET.SubElement(doc, 'name').text = "HydroGeo Predictive Map (Georeferenced)"
+
             min_v, max_v = np.nanmin(pred_data), np.nanmax(pred_data)
             rows, cols = pred_data.shape
             
-            # مجلد المضلعات التنبؤية
             folder_polys = ET.SubElement(doc, 'Folder')
-            ET.SubElement(folder_polys, 'name').text = "تغطية الخريطة التنبؤية (Grid Overlay)"
+            ET.SubElement(folder_polys, 'name').text = "تغطية خريطة المقاومية التنبؤية"
 
+            # 1. تحويل ورسم شبكة التنبؤ الفضائية
             for i in range(0, rows - step, step):
                 for j in range(0, cols - step, step):
                     val = pred_data[i, j]
                     if np.isnan(val): continue
                     
-                    # تحويل درجة المقاومية إلى لون شفاف (Jet Colorscale Simulation)
                     norm_val = (val - min_v) / (max_v - min_v + 1e-6)
                     r = int(255 * (1.0 - norm_val))
                     b = int(255 * norm_val)
                     g = int(255 * (1.0 - abs(norm_val - 0.5) * 2))
                     
-                    # صيغة اللون في KML هي alpha-blue-green-red
                     color_hex = f"aa{b:02x}{g:02x}{r:02x}"
                     
                     style = ET.SubElement(doc, 'Style', id=f"s_{i}_{j}")
@@ -325,34 +236,52 @@ with tab_export:
                     pm = ET.SubElement(folder_polys, 'Placemark')
                     ET.SubElement(pm, 'styleUrl').text = f"#s_{i}_{j}"
                     
+                    # الإحداثيات المتراكبة بـ UTM
                     x1, x2 = grid_X[i, j], grid_X[min(i+step, rows-1), min(j+step, cols-1)]
                     y1, y2 = grid_Y[i, j], grid_Y[min(i+step, rows-1), min(j+step, cols-1)]
                     
+                    # التحويل الفعلي للزوايا الأربع إلى Lat/Lon
+                    lon1, lat1 = transformer.transform(x1, y1)
+                    lon2, lat2 = transformer.transform(x2, y1)
+                    lon3, lat3 = transformer.transform(x2, y2)
+                    lon4, lat4 = transformer.transform(x1, y2)
+
                     poly = ET.SubElement(pm, 'Polygon')
                     boundary = ET.SubElement(poly, 'outerBoundaryIs')
                     ring = ET.SubElement(boundary, 'LinearRing')
-                    ET.SubElement(ring, 'coordinates').text = f"{x1},{y1},0 {x2},{y1},0 {x2},{y2},0 {x1},{y2},0 {x1},{y1},0"
+                    ET.SubElement(ring, 'coordinates').text = (
+                        f"{lon1},{lat1},0 {lon2},{lat2},0 {lon3},{lat3},0 {lon4},{lat4},0 {lon1},{lat1},0"
+                    )
 
-            # مجلد نقاط الجسات الأصلية
+            # 2. تحويل ورسم نقاط الجسات
             folder_pts = ET.SubElement(doc, 'Folder')
-            ET.SubElement(folder_pts, 'name').text = "نقاط الجسات الميدانية"
-            for idx, r in ves_clean.iterrows():
+            ET.SubElement(folder_pts, 'name').text = "مواقع الجسات الميدانية"
+            for idx, r in ves_df.iterrows():
+                lon_p, lat_p = transformer.transform(r[cx], r[cy])
                 pm_pt = ET.SubElement(folder_pts, 'Placemark')
                 ET.SubElement(pm_pt, 'name').text = f"VES-{idx+1}"
-                ET.SubElement(ET.SubElement(pm_pt, 'Point'), 'coordinates').text = f"{r[col_x]},{r[col_y]},0"
+                ET.SubElement(ET.SubElement(pm_pt, 'Point'), 'coordinates').text = f"{lon_p},{lat_p},0"
 
             return ET.tostring(kml, encoding='utf-8')
 
-        kml_full_data = export_full_predictive_kml(
-            st.session_state['grid_X'], 
-            st.session_state['grid_Y'], 
-            st.session_state['predicted_res']
+        st.markdown("---")
+        
+        # إنشاء ملف KML المسقط صحيحاً
+        correct_kml_data = generate_accurate_kml(
+            st.session_state['grid_X'],
+            st.session_state['grid_Y'],
+            st.session_state['predicted_res'],
+            st.session_state['ves_clean'],
+            st.session_state['col_x'],
+            st.session_state['col_y'],
+            epsg_code,
+            step=grid_resolution
         )
 
         st.download_button(
-            label="📲 تحميل الخريطة التنبؤية المباشرة (Full Grid KML) لـ Google Earth / AlpineQuest",
-            data=kml_full_data,
-            file_name="Full_Predictive_Resistivity_Map.kml",
+            label="🌍 تحميل الخريطة التنبؤية الموجهة جغرافياً (Correct WGS84 KML) لـ Google Earth / AlpineQuest",
+            data=correct_kml_data,
+            file_name="HydroGeo_RealWorld_Map.kml",
             mime="application/vnd.google-earth.kml+xml",
             type="primary"
         )
