@@ -51,7 +51,7 @@ with tab_inputs:
             st.error(f"خطأ في قراءة ملف الجسات: {e}")
             st.stop()
     else:
-        # بيانات افتراضية تجريبية
+        # بيانات افتراضية للعمل في حال عدم رفع ملف
         raw_data = {
             'ID-VES': ['VES-1'] + [np.nan]*12 + ['VES-2'] + [np.nan]*12,
             'X': [313525] + [np.nan]*12 + [314200] + [np.nan]*12,
@@ -66,7 +66,7 @@ with tab_inputs:
     df_processed = df_raw.copy()
     cols = df_processed.columns
     
-    # تحديد أسماء الأعمدة ديناميكياً
+    # التعرف الآلي على أسماء الأعمدة
     col_id = [c for c in cols if 'id' in c.lower() or 'ves' in c.lower() or 'جسة' in c.lower()][0]
     col_x = [c for c in cols if 'x' in c.lower() or 'شرق' in c.lower()][0]
     col_y = [c for c in cols if 'y' in c.lower() or 'شمال' in c.lower()][0]
@@ -75,23 +75,24 @@ with tab_inputs:
     col_ab = [c for c in cols if 'ab' in c.lower()][0]
     col_r = [c for c in cols if 'r' in c.lower() and c.lower() != 'ab'][0]
 
-    # سحب الإحداثيات الممتدة للأسفل
+    # سحب القيم الممتدة
     df_processed[col_id] = df_processed[col_id].ffill()
     df_processed[col_x] = df_processed[col_x].ffill()
     df_processed[col_y] = df_processed[col_y].ffill()
     df_processed[col_z] = df_processed[col_z].ffill()
 
-    # =========================================================
-    # المعالجة الآمنة لنوع البيانات والتخلص من المعاملات النصية
-    # =========================================================
+    # معالجة آمنة للأرقام ومنع TypeError
     df_processed[col_ab] = pd.to_numeric(df_processed[col_ab], errors='coerce')
     df_processed[col_mn] = pd.to_numeric(df_processed[col_mn], errors='coerce')
     df_processed[col_r] = pd.to_numeric(df_processed[col_r], errors='coerce')
+    df_processed[col_x] = pd.to_numeric(df_processed[col_x], errors='coerce')
+    df_processed[col_y] = pd.to_numeric(df_processed[col_y], errors='coerce')
+    df_processed[col_z] = pd.to_numeric(df_processed[col_z], errors='coerce')
 
-    # تنظيف الصفوف التي تحتوي على قيم غير رقمية أو فارغة
-    df_processed = df_processed.dropna(subset=[col_ab, col_mn, col_r])
+    # إزالة الصفوف غير الرقمية
+    df_processed = df_processed.dropna(subset=[col_ab, col_mn, col_r, col_x, col_y, col_z])
 
-    # الحسابات الهندسية للمقاومية الظاهرية K & Apparent Resistivity
+    # حساب المعامل الجيومتري K والمقاومية الظاهرية
     ab_2 = df_processed[col_ab] / 2.0
     mn_2 = df_processed[col_mn] / 2.0
 
@@ -119,6 +120,7 @@ with tab_processing:
         grid_density = st.slider("دقة كثافة الشبكة الحسابية (Grid Resolution):", 50, 200, 100)
         btn_process = st.button("🚀 تشغيل المعالجة الهيدروجيوفيزيائية المدمجة", type="primary")
 
+    # تجميع بيانات الجسات
     ves_summary = df_processed.groupby(col_id).agg(
         X=(col_x, 'first'),
         Y=(col_y, 'first'),
@@ -130,24 +132,40 @@ with tab_processing:
     ves_summary['Water_Table_Elevation'] = ves_summary['Elevation'] - (ves_summary['AB_2_Max'] * 0.25)
     ves_summary['Aquifer_Bottom_Elevation'] = ves_summary['Water_Table_Elevation'] - (ves_summary['AB_2_Max'] * 0.35)
 
-    x_min, x_max = ves_summary['X'].min(), ves_summary['X'].max()
-    y_min, y_max = ves_summary['Y'].min(), ves_summary['Y'].max()
-    if x_min == x_max: x_max += 500
-    if y_min == y_max: y_max += 500
+    # تحويل كامل القيم الرقمية للجدول التجميعي للتأكد من عدم وجود كائنات غير رقمية (Object/NaN)
+    for col in ['X', 'Y', 'Elevation', 'Water_Table_Elevation', 'Aquifer_Bottom_Elevation', 'Min_App_Res']:
+        ves_summary[col] = pd.to_numeric(ves_summary[col], errors='coerce')
+
+    ves_clean = ves_summary.dropna(subset=['X', 'Y', 'Elevation', 'Water_Table_Elevation', 'Aquifer_Bottom_Elevation', 'Min_App_Res']).copy()
+
+    x_min, x_max = ves_clean['X'].min(), ves_clean['X'].max()
+    y_min, y_max = ves_clean['Y'].min(), ves_clean['Y'].max()
+    if x_min == x_max or pd.isna(x_min):
+        x_min, x_max = 0.0, 1000.0
+    if y_min == y_max or pd.isna(y_min):
+        y_min, y_max = 0.0, 1000.0
 
     grid_x, grid_y = np.mgrid[x_min:x_max:complex(0, grid_density), y_min:y_max:complex(0, grid_density)]
 
-    def run_interpolation(values):
-        rbf = Rbf(ves_summary['X'], ves_summary['Y'], values, function='multiquadric', smooth=0.1)
+    # دالة الاستيفاء الآمنة وتفادي خطأ ValueError: object arrays
+    def run_interpolation(values_series):
+        x = ves_clean['X'].values.astype(np.float64)
+        y = ves_clean['Y'].values.astype(np.float64)
+        z = values_series.values.astype(np.float64)
+        
+        if len(ves_clean) < 2:
+            return np.full(grid_x.shape, z.mean() if len(z) > 0 else 100.0)
+        
+        rbf = Rbf(x, y, z, function='multiquadric', smooth=0.1)
         return rbf(grid_x, grid_y)
 
-    grid_surface = run_interpolation(ves_summary['Elevation'])
-    grid_water = run_interpolation(ves_summary['Water_Table_Elevation'])
-    grid_bottom = run_interpolation(ves_summary['Aquifer_Bottom_Elevation'])
-    grid_res = run_interpolation(ves_summary['Min_App_Res'])
+    grid_surface = run_interpolation(ves_clean['Elevation'])
+    grid_water = run_interpolation(ves_clean['Water_Table_Elevation'])
+    grid_bottom = run_interpolation(ves_clean['Aquifer_Bottom_Elevation'])
+    grid_res = run_interpolation(ves_clean['Min_App_Res'])
 
     if btn_process:
-        st.success("✅ تم دمج قراءات الملف حمادمعدل.xlsx وطبقات الاستشعار بنجاح!")
+        st.success("✅ تم دمج قراءات الملف وطبقات الاستشعار بنجاح!")
 
 # ---------------------------------------------------------
 # TAB 3: المخرجات والنمذجة ثلاثية الأبعاد
@@ -157,7 +175,7 @@ with tab_outputs:
     
     col_m1, col_m2 = st.columns(2)
     with col_m1:
-        selected_v = st.selectbox("اختر الجسة لعرض المنحنى:", ves_summary[col_id].unique())
+        selected_v = st.selectbox("اختر الجسة لعرض المنحنى:", ves_clean[col_id].unique())
         df_v = df_processed[df_processed[col_id] == selected_v]
         
         fig_curve = go.Figure()
