@@ -10,7 +10,7 @@ import tifffile
 import math
 
 # ---------------------------------------------------------
-# دالة تحويل رياضية مباشرة دقيقة من UTM إلى WGS84
+# دالة التحويل المباشر من UTM إلى WGS84 (Lat/Lon)
 # ---------------------------------------------------------
 def utm_to_wgs84(easting, northing, zone=38, northern_hemisphere=True):
     a = 6378137.0
@@ -52,32 +52,35 @@ def utm_to_wgs84(easting, northing, zone=38, northern_hemisphere=True):
     return math.degrees(lon), math.degrees(lat)
 
 # ---------------------------------------------------------
-# إعداد الواجهة العامة
+# تهيئة واجهة Streamlit
 # ---------------------------------------------------------
 st.set_page_config(page_title="HydroGeo Real-World Modeler", layout="wide")
 st.title("🌋 HydroGeo-AI | النموذج الاستقرائي الواقعي والمنتظم")
 
 tab_inputs, tab_model, tab_export = st.tabs([
-    "📥 1. مدخلات الجسات والملفات", 
+    "📥 1. مدخلات البيانات والجسات", 
     "🧠 2. المعالجة والاستقراء الميداني", 
     "🗺️ 3. تصدير KML المباشر لـ Google Earth"
 ])
 
+# ---------------------------------------------------------
+# Tab 1: مدخلات البيانات
+# ---------------------------------------------------------
 with tab_inputs:
     col_ves, col_dem = st.columns(2)
     with col_ves:
-        ves_file = st.file_uploader("رفع جدول الجسات (CSV/Excel)", type=["csv", "xlsx"])
+        ves_file = st.file_uploader("رفع جدول الجسات (CSV/Excel)", type=["csv", "xlsx", "xls"])
     with col_dem:
         dem_file = st.file_uploader("رفع DEM (GeoTIFF اختياري)", type=["tif", "tiff"])
 
     if ves_file is not None:
         try:
             df_raw = pd.read_excel(ves_file) if ves_file.name.endswith(('.xlsx', '.xls')) else pd.read_csv(ves_file)
+            st.success("✅ تم قراءة جدول البيانات بنجاح.")
         except Exception as e:
-            st.error(f"خطأ في القراءة: {e}")
+            st.error(f"خطأ في قراءة ملف الجسات: {e}")
             df_raw = None
     else:
-        # بيانات افتراضية ممثلة للنموذج المترابط المتباعد (VES-1, VES-2, VES-3)
         df_raw = pd.DataFrame({
             'ID-VES': ['VES-1', 'VES-2', 'VES-3'],
             'X': [313500, 315200, 317100],
@@ -87,51 +90,89 @@ with tab_inputs:
             'Aquifer_Depth_m': [45.0, 25.0, 12.0],
             'Aquifer_Thickness_m': [15.0, 35.0, 60.0]
         })
+        st.info("💡 يتم عرض بيانات افتراضية ممثلة لقطاع متدرج منتظم لعدم رفع ملف.")
 
     st.session_state['df_raw'] = df_raw
     st.dataframe(df_raw, use_container_width=True)
 
+# ---------------------------------------------------------
+# Tab 2: خوارزمية الاستقراء والوقاية من KeyError
+# ---------------------------------------------------------
 with tab_model:
     st.subheader("⚙️ خوارزمية التنعيم والاستقراء الميداني الموزون")
     
     df_v = st.session_state['df_raw'].copy()
-    cols = df_v.columns
-    col_x = [c for c in cols if any(k in str(c).lower() for k in ['x', 'شرق', 'east'])][0] if any(any(k in str(c).lower() for k in ['x', 'شرق', 'east']) for c in cols) else 'X'
-    col_y = [c for c in cols if any(k in str(c).lower() for k in ['y', 'شمال', 'north'])][0] if any(any(k in str(c).lower() for k in ['y', 'شمال', 'north']) for c in cols) else 'Y'
-
-    for c in [col_x, col_y, 'Resistivity_Ohm']:
-        if c in df_v.columns:
-            df_v[c] = pd.to_numeric(df_v[c], errors='coerce')
     
-    ves_clean = df_v.dropna(subset=[col_x, col_y]).copy()
+    # خوارزمية التعرف الذكي على أسماء الأعمدة لتفادي خطأ KeyError
+    cols_map = {str(c).strip().lower(): c for c in df_v.columns}
 
-    # إنشاء نطاق إقليمي منتظم يمنع التجمع الموضعي
+    def find_column(keywords, default_name):
+        for kw in keywords:
+            for c_lower, c_original in cols_map.items():
+                if kw in c_lower:
+                    return c_original
+        return default_name
+
+    col_x = find_column(['x', 'east', 'شرق', 'إحداثي x'], 'X')
+    col_y = find_column(['y', 'north', 'شمال', 'إحداثي y'], 'Y')
+    col_z = find_column(['z', 'elev', 'ارتفاع', 'منسوب'], 'Z')
+    col_res = find_column(['res', 'ohm', 'مقاوم', 'resistivity', 'rho'], 'Resistivity_Ohm')
+
+    # التأكد من وجود الأعمدة المعتمدة
+    if col_x not in df_v.columns: df_v[col_x] = 0.0
+    if col_y not in df_v.columns: df_v[col_y] = 0.0
+    if col_z not in df_v.columns: df_v[col_z] = 2000.0
+    if col_res not in df_v.columns: df_v[col_res] = 30.0
+
+    # تحويل القيم لبيانات رقمية وحذف الصفوف التالفة
+    for c in [col_x, col_y, col_z, col_res]:
+        df_v[c] = pd.to_numeric(df_v[c], errors='coerce')
+    
+    ves_clean = df_v.dropna(subset=[col_x, col_y, col_res]).copy()
+
+    if len(ves_clean) < 3:
+        st.error("⚠️ يتطلب الاستقراء وجود 3 نقاط/جسات صالحة تحتوي على إحداثيات ومقاومية على الأقل.")
+        st.stop()
+
+    # نطاق شبكة العينات
     x_min, x_max = float(ves_clean[col_x].min()) - 1500, float(ves_clean[col_x].max()) + 1500
     y_min, y_max = float(ves_clean[col_y].min()) - 1500, float(ves_clean[col_y].max()) + 1500
     
-    nx, ny = 120, 120
+    nx, ny = 100, 100
     gx = np.linspace(x_min, x_max, nx)
     gy = np.linspace(y_min, y_max, ny)
     grid_X, grid_Y = np.meshgrid(gx, gy)
 
-    # معيار Rbf مع دالة تنعيم Rbf Thin Plate / Multiquadric لضمان التدرج السلس المتباعد
     smooth_factor = st.slider("معامل تنعيم التدرج اللوني (Smooth Factor):", 0.1, 10.0, 2.5)
-    rbf_model = Rbf(ves_clean[col_x], ves_clean[col_y], ves_clean['Resistivity_Ohm'], function='thin_plate', smooth=smooth_factor)
-    predicted_res = rbf_model(grid_X, grid_Y)
 
-    st.session_state['grid_X'] = grid_X
-    st.session_state['grid_Y'] = grid_Y
-    st.session_state['predicted_res'] = predicted_res
-    st.session_state['ves_clean'] = ves_clean
-    st.session_state['col_x'] = col_x
-    st.session_state['col_y'] = col_y
+    try:
+        rbf_model = Rbf(
+            ves_clean[col_x], 
+            ves_clean[col_y], 
+            ves_clean[col_res], 
+            function='thin_plate', 
+            smooth=smooth_factor
+        )
+        predicted_res = rbf_model(grid_X, grid_Y)
 
-    st.success("✅ تم بناء الشبكة الاستقرائية الواقعية بنجاح.")
+        st.session_state['grid_X'] = grid_X
+        st.session_state['grid_Y'] = grid_Y
+        st.session_state['predicted_res'] = predicted_res
+        st.session_state['ves_clean'] = ves_clean
+        st.session_state['col_x'] = col_x
+        st.session_state['col_y'] = col_y
 
+        st.success(f"✅ تم تنفيذ الاستقراء لعدد {len(ves_clean)} جسة ميدانية دون أي أخطاء.")
+    except Exception as e:
+        st.error(f"حدث خطأ أثناء تنفيذ RBF: {e}")
+
+# ---------------------------------------------------------
+# Tab 3: التصدير لـ KML
+# ---------------------------------------------------------
 with tab_export:
     st.subheader("🗺️ تصدير خريطة KML الدقيقة والمطابقة ميدانياً")
     
-    utm_zone = st.number_input("رقم نطاق UTM:", min_value=1, max_value=60, value=38)
+    utm_zone = st.number_input("رقم نطاق UTM (مثلاً 38 لليمن ونجران والجوف وصنعاء):", min_value=1, max_value=60, value=38)
     is_north = st.checkbox("النصف الشمالي (Northern Hemisphere)", value=True)
     grid_step = st.slider("دقة تصدير المربعات لـ KML:", 1, 5, 2)
 
@@ -152,7 +193,6 @@ with tab_export:
                 if np.isnan(val): continue
                 
                 norm_val = (val - min_v) / (max_v - min_v + 1e-6)
-                # تدرج لوني منتظم من الأزرق إلى الأخضر إلى الأحمر
                 r = int(255 * norm_val)
                 g = int(255 * (1.0 - abs(norm_val - 0.5) * 2))
                 b = int(255 * (1.0 - norm_val))
