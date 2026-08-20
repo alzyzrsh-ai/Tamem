@@ -69,47 +69,57 @@ tab_inputs, tab_model, tab_3d_strat, tab_export = st.tabs([
 ])
 
 # ---------------------------------------------------------
-# TAB 1: مدخلات البيانات وتوفير البيانات الافتراضية الذكية
+# TAB 1: مدخلات البيانات التفاعلية (VES + Remote Sensing)
 # ---------------------------------------------------------
 with tab_inputs:
     col_rs, col_ves = st.columns(2)
     
     with col_rs:
-        st.markdown("### 🛰️ بيانات الاستشعار عن بعد (Rasters)")
-        dem_file = st.file_uploader("نموذج الارتفاع الرقمي (DEM - GeoTIFF)", type=["tif", "tiff"], key="dem_input")
+        st.markdown("### 🛰️ بيانات الاستشعار عن بعد (Remote Sensing Data)")
+        rs_option = st.radio("مصدر بيانات الاستشعار عن بعد:", ["رفع ملف GeoTIFF (DEM/LST/NDWI)", "رفع جدول مؤشرات فضائية (CSV/Excel)", "افتراضي (نموذج حوض هيدرولوجي)"])
+        
+        rs_grid_data = None
+        if rs_option == "رفع ملف GeoTIFF (DEM/LST/NDWI)":
+            dem_file = st.file_uploader("رفع ملف الراستر (TIFF)", type=["tif", "tiff"], key="dem_input")
+            if dem_file is not None:
+                try:
+                    rs_grid_data = tifffile.imread(io.BytesIO(dem_file.read()))
+                    if rs_grid_data.ndim > 2: rs_grid_data = rs_grid_data[:, :, 0]
+                    st.success("✅ تم تحميل راستر الاستشعار عن بعد بنجاح.")
+                except Exception as e:
+                    st.error(f"خطأ في قراءة ملف TIFF: {e}")
+        
+        elif rs_option == "رفع جدول مؤشرات فضائية (CSV/Excel)":
+            rs_csv_file = st.file_uploader("جدول المؤشرات الفضائية (X, Y, RS_Val)", type=["csv", "xlsx"], key="rs_csv")
+            if rs_csv_file is not None:
+                try:
+                    df_rs = pd.read_csv(rs_csv_file) if rs_csv_file.name.endswith('.csv') else pd.read_excel(rs_csv_file)
+                    st.dataframe(df_rs.head(3), use_container_width=True)
+                    st.success("✅ تم تحميل جدول الاستشعار عن بعد.")
+                except Exception as e:
+                    st.error(f"خطأ في قراءة الجدول: {e}")
 
     with col_ves:
         st.markdown("### ⚡ بيانات الجسات الجيوكهربائية (VES Soundings)")
         ves_file = st.file_uploader("جدول الجسات (Excel/CSV)", type=["xlsx", "xls", "csv"], key="ves_input")
 
-    if dem_file is not None:
-        try:
-            dem_data = tifffile.imread(io.BytesIO(dem_file.read()))
-            if dem_data.ndim > 2: dem_data = dem_data[:, :, 0]
-            st.success(f"✅ تم تحميل DEM بمقاس {dem_data.shape[1]}x{dem_data.shape[0]} بكسل")
-        except Exception as e:
-            st.error(f"خطأ في قراءة ملف GeoTIFF: {e}")
-            dem_data = None
-    else:
+    # إعداد البيانات الافتراضية للراستر عند عدم رفع ملف
+    if rs_grid_data is None:
         x_grid = np.linspace(313000, 318000, 100)
         y_grid = np.linspace(1673000, 1678000, 100)
         X, Y = np.meshgrid(x_grid, y_grid)
-        dem_data = 2200 - 0.05 * (X - 313000) - 0.08 * (Y - 1673000) - 120 * np.exp(-((X - 315500)**2 + (Y - 1675500)**2) / 2e6)
-        st.info("💡 يتم استخدام نموذج حوض هيدرولوجي كبيانات افتراضية للتحليل لعدم رفع ملف DEM.")
+        rs_grid_data = 2200 - 0.05 * (X - 313000) - 0.08 * (Y - 1673000) - 120 * np.exp(-((X - 315500)**2 + (Y - 1675500)**2) / 2e6)
+        st.info("💡 يتم استخدام نموذج استشعار افتراضي (DEM) لعدم رفع ملف راستر.")
 
-    st.session_state['dem_raster'] = dem_data
+    st.session_state['dem_raster'] = rs_grid_data
 
     if ves_file is not None:
         try:
-            if ves_file.name.endswith(('.xlsx', '.xls')):
-                df_raw = pd.read_excel(ves_file)
-            else:
-                df_raw = pd.read_csv(ves_file)
+            df_raw = pd.read_excel(ves_file) if ves_file.name.endswith(('.xlsx', '.xls')) else pd.read_csv(ves_file)
             st.session_state['df_raw'] = df_raw
             st.success("✅ تم قراءة جدول الجسات بنجاح.")
         except Exception as e:
             st.error(f"خطأ في قراءة ملف الجسات: {e}")
-            df_raw = None
     else:
         df_raw = pd.DataFrame({
             'ID-VES': [f'VES-{i+1}' for i in range(8)],
@@ -128,7 +138,7 @@ with tab_inputs:
 # TAB 2: محرك التنبؤ والاستقراء المكاني
 # ---------------------------------------------------------
 with tab_model:
-    st.subheader("🧠 استقراء سلوك الطبقات العميقة بناءً على مؤشرات السطح")
+    st.subheader("🧠 استقراء سلوك الطبقات العميقة بناءً على مؤشرات السطح والـ RS")
     col_m1, col_m2 = st.columns(2)
     
     df_v = st.session_state.get('df_raw', pd.DataFrame()).copy()
@@ -155,8 +165,10 @@ with tab_model:
         st.error("⚠️ لم يتم العثور على أرقام إحداثيات صالحة.")
         st.stop()
 
+    dem_data = st.session_state['dem_raster']
+
     with col_m1:
-        st.markdown("#### 1. استخرج المتغيرات الفضائية عند موقع الجسات")
+        st.markdown("#### 1. استخراج المتغيرات الفضائية عند موقع الجسات")
         dy, dx = np.gradient(dem_data)
         slope = np.sqrt(dx**2 + dy**2)
         flow_accumulation = gaussian_filter(1.0 / (slope + 0.005), sigma=3.0)
@@ -167,7 +179,7 @@ with tab_model:
 
     with col_m2:
         st.markdown("#### 2. خوارزميات الاستقراء الهيدروجيوفيزيائي")
-        corr_weight = st.slider("معامل تأثير شبكة التصريف المائي:", 0.1, 1.0, 0.65)
+        corr_weight = st.slider("معامل تأثير المؤشرات الفضائية (RS):", 0.1, 1.0, 0.65)
 
     ny, nx = dem_data.shape
     gx = np.linspace(x_min, x_max, nx)
@@ -191,6 +203,7 @@ with tab_model:
     aquifer_bottom_z = water_table_z - predicted_thickness
 
     st.session_state['predicted_res'] = predicted_resistivity
+    st.session_state['flow_accumulation'] = flow_accumulation
     st.session_state['surface_z'] = surface_z
     st.session_state['water_table_z'] = water_table_z
     st.session_state['aquifer_bottom_z'] = aquifer_bottom_z
@@ -222,74 +235,80 @@ with tab_3d_strat:
         st.plotly_chart(fig_3d, use_container_width=True)
 
 # ---------------------------------------------------------
-# TAB 4: الخرائط التنبؤية المتقدمة والتصدير الميداني الدقيق
+# TAB 4: الخرائط التنبؤية المتقدمة والتصدير الميداني Multi-Layer
 # ---------------------------------------------------------
 with tab_export:
-    st.subheader("🗺️ إعدادات الإسقاط وتصدير الخريطة التنبؤية لـ Google Earth")
+    st.subheader("🗺️ إعدادات الإسقاط وتصدير الطبقات لـ Google Earth / AlpineQuest")
 
     if 'predicted_res' in st.session_state:
         col_proj1, col_proj2 = st.columns(2)
         
         with col_proj1:
             st.markdown("### 🌐 تحديد نظام الإحداثيات الميداني")
-            utm_zone = st.number_input("رقم نطاق UTM (مثلاً 38 لليمن ورأس المعزاب/الجوف/صنعاء):", min_value=1, max_value=60, value=38)
+            utm_zone = st.number_input("رقم نطاق UTM (مثلاً 38 لليمن والجزيرة العربية):", min_value=1, max_value=60, value=38)
             is_northern = st.checkbox("النصف الشمالي من الكرة الأرضية (Northern Hemisphere)", value=True)
 
         with col_proj2:
             st.markdown("### 🛠️ معايير تصدير KML الميداني")
             grid_resolution = st.slider("دقة الشبكة المصدّرة (دقة أعلى = ملف أكبر):", 1, 6, 3)
 
-        def generate_accurate_kml(grid_X, grid_Y, pred_data, ves_df, cx, cy, zone, is_north, step=3):
+        def generate_full_integrated_kml(grid_X, grid_Y, pred_data, rs_flow, ves_df, cx, cy, zone, is_north, step=3):
             kml = ET.Element('kml', xmlns="http://www.opengis.net/kml/2.2")
             doc = ET.SubElement(kml, 'Document')
-            ET.SubElement(doc, 'name').text = "HydroGeo Predictive Map (Georeferenced)"
+            ET.SubElement(doc, 'name').text = "Integrated HydroGeo & Remote Sensing Map"
+
+            # 1. مجلد طبقة الاستشعار عن بعد (RS Stream Networks)
+            folder_rs = ET.SubElement(doc, 'Folder')
+            ET.SubElement(folder_rs, 'name').text = "🛰️ مسارات الاستشعار عن بعد (RS Stream/Flow Channels)"
+            
+            rows, cols = rs_flow.shape
+            flow_thresh = np.percentile(rs_flow, 88)
+            
+            for i in range(0, rows - step, step*2):
+                for j in range(0, cols - step, step*2):
+                    if rs_flow[i, j] > flow_thresh:
+                        x_p, y_p = grid_X[i, j], grid_Y[i, j]
+                        lon_p, lat_p = utm_to_wgs84(x_p, y_p, zone, is_north)
+                        
+                        pm_rs = ET.SubElement(folder_rs, 'Placemark')
+                        ET.SubElement(pm_rs, 'name').text = "مجرى مائي فصلي / قناة هيدرولوجية"
+                        ET.SubElement(ET.SubElement(pm_rs, 'Point'), 'coordinates').text = f"{lon_p},{lat_p},0"
+
+            # 2. مجلد خريطة المقاومية التنبؤية المدمجة
+            folder_polys = ET.SubElement(doc, 'Folder')
+            ET.SubElement(folder_polys, 'name').text = "⚡ خريطة المقاومية التنبؤية المدمجة"
 
             min_v, max_v = np.nanmin(pred_data), np.nanmax(pred_data)
-            rows, cols = pred_data.shape
-            
-            folder_polys = ET.SubElement(doc, 'Folder')
-            ET.SubElement(folder_polys, 'name').text = "تغطية خريطة المقاومية التنبؤية"
-
             for i in range(0, rows - step, step):
                 for j in range(0, cols - step, step):
                     val = pred_data[i, j]
                     if np.isnan(val): continue
                     
                     norm_val = (val - min_v) / (max_v - min_v + 1e-6)
-                    r = int(255 * (1.0 - norm_val))
-                    b = int(255 * norm_val)
-                    g = int(255 * (1.0 - abs(norm_val - 0.5) * 2))
-                    
-                    color_hex = f"aa{b:02x}{g:02x}{r:02x}"
+                    r, b, g = int(255 * (1.0 - norm_val)), int(255 * norm_val), int(255 * (1.0 - abs(norm_val - 0.5) * 2))
                     
                     style = ET.SubElement(doc, 'Style', id=f"s_{i}_{j}")
-                    polystyle = ET.SubElement(style, 'PolyStyle')
-                    ET.SubElement(polystyle, 'color').text = color_hex
-                    ET.SubElement(polystyle, 'outline').text = "0"
-
+                    ET.SubElement(ET.SubElement(style, 'PolyStyle'), 'color').text = f"aa{b:02x}{g:02x}{r:02x}"
+                    
                     pm = ET.SubElement(folder_polys, 'Placemark')
                     ET.SubElement(pm, 'styleUrl').text = f"#s_{i}_{j}"
                     
                     x1, x2 = grid_X[i, j], grid_X[min(i+step, rows-1), min(j+step, cols-1)]
                     y1, y2 = grid_Y[i, j], grid_Y[min(i+step, rows-1), min(j+step, cols-1)]
                     
-                    # التحويل المباشر دون الاعتماد على مكتبات إضافية
-                    lon1, lat1 = utm_to_wgs84(x1, y1, zone=zone, northern_hemisphere=is_north)
-                    lon2, lat2 = utm_to_wgs84(x2, y1, zone=zone, northern_hemisphere=is_north)
-                    lon3, lat3 = utm_to_wgs84(x2, y2, zone=zone, northern_hemisphere=is_north)
-                    lon4, lat4 = utm_to_wgs84(x1, y2, zone=zone, northern_hemisphere=is_north)
+                    lon1, lat1 = utm_to_wgs84(x1, y1, zone, is_north)
+                    lon2, lat2 = utm_to_wgs84(x2, y1, zone, is_north)
+                    lon3, lat3 = utm_to_wgs84(x2, y2, zone, is_north)
+                    lon4, lat4 = utm_to_wgs84(x1, y2, zone, is_north)
 
-                    poly = ET.SubElement(pm, 'Polygon')
-                    boundary = ET.SubElement(poly, 'outerBoundaryIs')
-                    ring = ET.SubElement(boundary, 'LinearRing')
-                    ET.SubElement(ring, 'coordinates').text = (
-                        f"{lon1},{lat1},0 {lon2},{lat2},0 {lon3},{lat3},0 {lon4},{lat4},0 {lon1},{lat1},0"
-                    )
+                    ring = ET.SubElement(ET.SubElement(ET.SubElement(pm, 'Polygon'), 'outerBoundaryIs'), 'LinearRing')
+                    ET.SubElement(ring, 'coordinates').text = f"{lon1},{lat1},0 {lon2},{lat2},0 {lon3},{lat3},0 {lon4},{lat4},0 {lon1},{lat1},0"
 
+            # 3. مجلد مواقع الجسات
             folder_pts = ET.SubElement(doc, 'Folder')
-            ET.SubElement(folder_pts, 'name').text = "مواقع الجسات الميدانية"
+            ET.SubElement(folder_pts, 'name').text = "📍 مواقع الجسات الجيوكهربائية (VES)"
             for idx, r in ves_df.iterrows():
-                lon_p, lat_p = utm_to_wgs84(r[cx], r[cy], zone=zone, northern_hemisphere=is_north)
+                lon_p, lat_p = utm_to_wgs84(r[cx], r[cy], zone, is_north)
                 pm_pt = ET.SubElement(folder_pts, 'Placemark')
                 ET.SubElement(pm_pt, 'name').text = f"VES-{idx+1}"
                 ET.SubElement(ET.SubElement(pm_pt, 'Point'), 'coordinates').text = f"{lon_p},{lat_p},0"
@@ -298,10 +317,11 @@ with tab_export:
 
         st.markdown("---")
         
-        correct_kml_data = generate_accurate_kml(
+        correct_kml_data = generate_full_integrated_kml(
             st.session_state['grid_X'],
             st.session_state['grid_Y'],
             st.session_state['predicted_res'],
+            st.session_state['flow_accumulation'],
             st.session_state['ves_clean'],
             st.session_state['col_x'],
             st.session_state['col_y'],
@@ -311,9 +331,9 @@ with tab_export:
         )
 
         st.download_button(
-            label="🌍 تحميل الخريطة التنبؤية الموجهة جغرافياً (Standalone WGS84 KML) لـ Google Earth / AlpineQuest",
+            label="🌍 تحميل الخريطة المدمجة متعددة الطبقات (Multi-Layer Integrated KML) لـ Google Earth / AlpineQuest",
             data=correct_kml_data,
-            file_name="HydroGeo_RealWorld_Map.kml",
+            file_name="HydroGeo_Full_Integrated_Map.kml",
             mime="application/vnd.google-earth.kml+xml",
             type="primary"
         )
