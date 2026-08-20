@@ -11,7 +11,7 @@ import tifffile
 import math
 
 # ---------------------------------------------------------
-# دالة تحويل رياضية من UTM إلى WGS84 (Lat/Lon) بدون مكتبات خارجية
+# دالة تحويل رياضية مباشرة من UTM إلى WGS84 (Lat/Lon)
 # ---------------------------------------------------------
 def utm_to_wgs84(easting, northing, zone=38, northern_hemisphere=True):
     a = 6378137.0  # WGS84 semi-major axis
@@ -69,7 +69,7 @@ tab_inputs, tab_model, tab_3d_strat, tab_export = st.tabs([
 ])
 
 # ---------------------------------------------------------
-# TAB 1: مدخلات البيانات وتوفير البيانات الافتراضية الذكية
+# TAB 1: مدخلات البيانات والتطابق المكاني
 # ---------------------------------------------------------
 with tab_inputs:
     col_rs, col_ves = st.columns(2)
@@ -232,7 +232,7 @@ with tab_export:
         
         with col_proj1:
             st.markdown("### 🌐 تحديد نظام الإحداثيات الميداني")
-            utm_zone = st.number_input("رقم نطاق UTM (مثلاً 38 لليمن ورأس المعزاب/الجوف/صنعاء):", min_value=1, max_value=60, value=38)
+            utm_zone = st.number_input("رقم نطاق UTM (مثلاً 38 لليمن ونجران والجوف وصنعاء):", min_value=1, max_value=60, value=38)
             is_northern = st.checkbox("النصف الشمالي من الكرة الأرضية (Northern Hemisphere)", value=True)
 
         with col_proj2:
@@ -273,7 +273,6 @@ with tab_export:
                     x1, x2 = grid_X[i, j], grid_X[min(i+step, rows-1), min(j+step, cols-1)]
                     y1, y2 = grid_Y[i, j], grid_Y[min(i+step, rows-1), min(j+step, cols-1)]
                     
-                    # التحويل المباشر دون الاعتماد على مكتبات إضافية
                     lon1, lat1 = utm_to_wgs84(x1, y1, zone=zone, northern_hemisphere=is_north)
                     lon2, lat2 = utm_to_wgs84(x2, y1, zone=zone, northern_hemisphere=is_north)
                     lon3, lat3 = utm_to_wgs84(x2, y2, zone=zone, northern_hemisphere=is_north)
