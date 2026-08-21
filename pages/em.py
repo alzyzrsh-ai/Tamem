@@ -1,6 +1,9 @@
+import os
+import urllib.request
 import streamlit as st
 import numpy as np
 import pandas as pd
+import xarray as xr
 import rasterio
 from io import BytesIO
 from rasterio.transform import from_origin
@@ -10,8 +13,8 @@ from scipy.fft import fft2, ifft2
 # إعدادات الصفحة
 st.set_page_config(page_title="استكشاف المغناطيسية وصخور القاعدة", layout="wide")
 
-st.title("🧲 استكشاف البيانات المغناطيسية واستنباط صخور القاعدة")
-st.write("أدخل إحداثيات المنطقة لإنشاء معالجة البيانات المغناطيسية، تصديرها بصيغ رقمية، واستنباط التراكيب تحت السطحية.")
+st.title("🧲 استكشاف البيانات المغناطيسية واستنباط صخور القاعدة (بيانات حقيقية)")
+st.write("أدخل إحداثيات المنطقة لقص البيانات المغناطيسية الحقيقية (EMAG2)، تصديرها بصيغ رقمية، واستنباط التراكيب تحت السطحية.")
 
 # ==========================================
 # 1. شريط الإعدادات والإحداثيات (Sidebar)
@@ -33,42 +36,53 @@ else:
     max_y = st.sidebar.number_input("أعلى خط عرض (Max Latitude):", value=14.5)
 
 # ==========================================
-# 2. توليد الشبكة المغناطيسية محلياً (بدون شبكة خارجية)
+# 2. دالة التنزيل التلقائي وقراءة الملف الحقيقي
 # ==========================================
-def generate_local_magnetic_grid(min_x, max_x, min_y, max_y, is_utm, utm_epsg):
-    try:
-        epsg_code = int(utm_epsg)
-    except (ValueError, TypeError):
-        epsg_code = 32638
-
+def get_real_emag2_crop(min_x, max_x, min_y, max_y, is_utm, utm_epsg):
+    # تحويل UTM إلى Lat/Lon إذا تطلب الأمر
     if is_utm:
+        try:
+            epsg_code = int(utm_epsg)
+        except (ValueError, TypeError):
+            epsg_code = 32638
         transformer = Transformer.from_crs(f"EPSG:{epsg_code}", "EPSG:4326", always_xy=True)
         lon_min, lat_min = transformer.transform(min_x, min_y)
         lon_max, lat_max = transformer.transform(max_x, max_y)
     else:
         lon_min, lon_max, lat_min, lat_max = min_x, max_x, min_y, max_y
 
-    # إنشاء شبكة إحداثيات محلياً
-    grid_size = 120
-    x = np.linspace(lon_min, lon_max, grid_size)
-    y = np.linspace(lat_min, lat_max, grid_size)
-    X, Y = np.meshgrid(x, y)
-
-    # نموذج رياضى مدمج للشذوذ المغناطيسي والصخور الأساسية
-    scale_x = (X - lon_min) / (lon_max - lon_min + 1e-6)
-    scale_y = (Y - lat_min) / (lat_max - lat_min + 1e-6)
+    local_file = "emag2_v2.nc"
     
-    tmi_grid = (
-        180 * np.sin(scale_x * 4 * np.pi) * np.cos(scale_y * 3 * np.pi) +
-        220 * np.exp(-((scale_x - 0.5)**2 + (scale_y - 0.5)**2) / 0.08) +
-        45 * np.sin(scale_x * 12 * np.pi) +
-        np.random.normal(0, 4, X.shape)
-    )
+    # رابط التنزيل المباشر لملف EMAG2 الاصلي المعتمد
+    url = "https://www.ngdc.noaa.gov/geomag/data/EMAG2/EMAG2_V2_20090519.nc"
 
-    return tmi_grid, lon_min, lon_max, lat_min, lat_max
+    # التنزيل البرمجي الذكي لمرة واحدة فقط على السيرفر
+    if not os.path.exists(local_file):
+        with st.spinner("جاري تنزيل ملف شبكة البيانات المغناطيسية الحقيقية (EMAG2) لأول مرة..."):
+            urllib.request.urlretrieve(url, local_file)
+
+    # قراءة الملف الحقيقي بواسطة xarray وقص النطاق الجغرافي المطلوب
+    ds = xr.open_dataset(local_file)
+    
+    lon_key = 'lon' if 'lon' in ds.coords else 'longitude'
+    lat_key = 'lat' if 'lat' in ds.coords else 'latitude'
+    var_key = list(ds.data_vars)[0]
+
+    cropped = ds.sel({
+        lon_key: slice(lon_min, lon_max),
+        lat_key: slice(lat_min, lat_max)
+    })
+
+    mag_grid = cropped[var_key].values
+    
+    # المعالجة في حال كان البعد معكوساً
+    if mag_grid.ndim > 2:
+        mag_grid = mag_grid.squeeze()
+
+    return mag_grid, lon_min, lon_max, lat_min, lat_max
 
 # ==========================================
-# 3. دالة معالجة التراكيب تحت السطحية
+# 3. دالة معالجة التراكيب والإشارة التحليلية
 # ==========================================
 def process_mag(mag_data, dx=2000):
     ny, nx = mag_data.shape
@@ -90,89 +104,87 @@ def process_mag(mag_data, dx=2000):
     return fvd, analytic_signal
 
 # ==========================================
-# 4. تنفيذ واستعراض النتائج والتصدير
+# 4. زر التنفيذ والعرض
 # ==========================================
-if st.button("🚀 جلب البيانات ومعالجة صخور القاعدة"):
-    with st.spinner("جاري حساب المعالجات واستنتاج صخور القاعدة..."):
-        try:
-            is_utm = (coord_type == "UTM")
-            mag_grid, lon_min, lon_max, lat_min, lat_max = generate_local_magnetic_grid(
-                min_x, max_x, min_y, max_y, is_utm, epsg_input
+if st.button("🚀 قص البيانات الحقيقية ومعالجة صخور القاعدة"):
+    try:
+        is_utm = (coord_type == "UTM")
+        mag_grid, lon_min, lon_max, lat_min, lat_max = get_real_emag2_crop(
+            min_x, max_x, min_y, max_y, is_utm, epsg_input
+        )
+        
+        fvd, as_map = process_mag(mag_grid)
+
+        st.success("تم استخراج البيانات المغناطيسية الحقيقية ومعالجة صخور القاعدة بنجاح!")
+
+        tab1, tab2, tab3 = st.tabs(["الشذوذ المغناطيسي الحقيقي (TMI)", "المشتقة الرأسية (FVD)", "الإشارة التحليلية (Analytic Signal)"])
+        
+        with tab1:
+            st.subheader("خريطة الشذوذ المغناطيسي الكلي الحقيقي (TMI - nT)")
+            st.image(mag_grid, use_container_width=True, clamp=True)
+        
+        with tab2:
+            st.subheader("المشتقة الرأسية الأولى (FVD) - الصدوع والتراكيب")
+            st.image(fvd, use_container_width=True, clamp=True)
+            
+        with tab3:
+            st.subheader("الإشارة التحليلية (Analytic Signal) - حدود صخور القاعدة")
+            st.image(as_map, use_container_width=True, clamp=True)
+
+        st.markdown("---")
+        st.header("📥 تصدير المخرجات")
+        col1, col2 = st.columns(2)
+
+        # 1. تصدير Excel
+        lons = np.linspace(lon_min, lon_max, mag_grid.shape[1])
+        lats = np.linspace(lat_min, lat_max, mag_grid.shape[0])
+        lon_g, lat_g = np.meshgrid(lons, lats)
+        
+        df = pd.DataFrame({
+            'Longitude': lon_g.flatten(),
+            'Latitude': lat_g.flatten(),
+            'TMI_nT': mag_grid.flatten(),
+            'FVD': fvd.flatten(),
+            'Analytic_Signal': as_map.flatten()
+        })
+        
+        excel_buffer = BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False)
+        
+        with col1:
+            st.download_button(
+                label="📊 تحميل البيانات الحقيقية (Excel)",
+                data=excel_buffer.getvalue(),
+                file_name="real_magnetic_data.xlsx",
+                mime="application/vnd.ms-excel"
             )
-            
-            fvd, as_map = process_mag(mag_grid)
 
-            st.success("تمت المعالجة وتصدير الخرائط بنجاح!")
+        # 2. تصدير GeoTIFF
+        geotiff_buffer = BytesIO()
+        res_x = (lon_max - lon_min) / mag_grid.shape[1]
+        res_y = (lat_max - lat_min) / mag_grid.shape[0]
+        transform = from_origin(lon_min, lat_max, res_x, res_y)
 
-            # عرض النتائج في ألسنة تبويب
-            tab1, tab2, tab3 = st.tabs(["الشذوذ المغناطيسي (TMI)", "المشتقة الرأسية (FVD)", "الإشارة التحليلية (Analytic Signal)"])
-            
-            with tab1:
-                st.subheader("خريطة الشذوذ المغناطيسي الكلي (TMI)")
-                st.image(mag_grid, use_container_width=True, clamp=True)
-            
-            with tab2:
-                st.subheader("المشتقة الرأسية الأولى (FVD) - لإبراز الصدوع والتراكيب")
-                st.image(fvd, use_container_width=True, clamp=True)
-                
-            with tab3:
-                st.subheader("الإشارة التحليلية (Analytic Signal) - لتحديد حدود صخور القاعدة")
-                st.image(as_map, use_container_width=True, clamp=True)
+        with rasterio.open(
+            geotiff_buffer, 'w',
+            driver='GTiff',
+            height=mag_grid.shape[0],
+            width=mag_grid.shape[1],
+            count=1,
+            dtype=mag_grid.dtype,
+            crs='EPSG:4326',
+            transform=transform,
+        ) as dst:
+            dst.write(mag_grid, 1)
 
-            st.markdown("---")
-            st.header("📥 تصدير البيانات والنتائج")
-            col1, col2 = st.columns(2)
+        with col2:
+            st.download_button(
+                label="🗺️ تحميل الخريطة الجغرافية (GeoTIFF)",
+                data=geotiff_buffer.getvalue(),
+                file_name="real_magnetic_layer.tif",
+                mime="image/tiff"
+            )
 
-            # 1. إعداد وتصدير ملف Excel
-            lons = np.linspace(lon_min, lon_max, mag_grid.shape[1])
-            lats = np.linspace(lat_min, lat_max, mag_grid.shape[0])
-            lon_g, lat_g = np.meshgrid(lons, lats)
-            
-            df = pd.DataFrame({
-                'Longitude': lon_g.flatten(),
-                'Latitude': lat_g.flatten(),
-                'TMI_nT': mag_grid.flatten(),
-                'FVD': fvd.flatten(),
-                'Analytic_Signal': as_map.flatten()
-            })
-            
-            excel_buffer = BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False)
-            
-            with col1:
-                st.download_button(
-                    label="📊 تحميل البيانات المخرجة (Excel)",
-                    data=excel_buffer.getvalue(),
-                    file_name="subsurface_magnetic_data.xlsx",
-                    mime="application/vnd.ms-excel"
-                )
-
-            # 2. إعداد وتصدير ملف GeoTIFF
-            geotiff_buffer = BytesIO()
-            res_x = (lon_max - lon_min) / mag_grid.shape[1]
-            res_y = (lat_max - lat_min) / mag_grid.shape[0]
-            transform = from_origin(lon_min, lat_max, res_x, res_y)
-
-            with rasterio.open(
-                geotiff_buffer, 'w',
-                driver='GTiff',
-                height=mag_grid.shape[0],
-                width=mag_grid.shape[1],
-                count=1,
-                dtype=mag_grid.dtype,
-                crs='EPSG:4326',
-                transform=transform,
-            ) as dst:
-                dst.write(mag_grid, 1)
-
-            with col2:
-                st.download_button(
-                    label="🗺️ تحميل الخريطة المرجعية (GeoTIFF)",
-                    data=geotiff_buffer.getvalue(),
-                    file_name="magnetic_layer.tif",
-                    mime="image/tiff"
-                )
-
-        except Exception as e:
-            st.error(f"حدث خطأ أثناء معالجة الطلب: {str(e)}")
+    except Exception as e:
+        st.error(f"حدث خطأ أثناء معالجة البيانات: {str(e)}")
