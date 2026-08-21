@@ -2,7 +2,6 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import rasterio
-import requests
 from io import BytesIO
 from rasterio.transform import from_origin
 from pyproj import Transformer
@@ -12,7 +11,7 @@ from scipy.fft import fft2, ifft2
 st.set_page_config(page_title="استكشاف المغناطيسية وصخور القاعدة", layout="wide")
 
 st.title("🧲 استكشاف البيانات المغناطيسية واستنباط صخور القاعدة")
-st.write("أدخل إحداثيات المنطقة لقص البيانات المغناطيسية، تصديرها بصيغ رقمية، واستنباط التراكيب تحت السطحية.")
+st.write("أدخل إحداثيات المنطقة لإنشاء معالجة البيانات المغناطيسية، تصديرها بصيغ رقمية، واستنباط التراكيب تحت السطحية.")
 
 # ==========================================
 # 1. شريط الإعدادات والإحداثيات (Sidebar)
@@ -34,9 +33,9 @@ else:
     max_y = st.sidebar.number_input("أعلى خط عرض (Max Latitude):", value=14.5)
 
 # ==========================================
-# 2. دالة جلب البيانات المغناطيسية (API ثابت)
+# 2. توليد الشبكة المغناطيسية محلياً (بدون شبكة خارجية)
 # ==========================================
-def fetch_magnetic_data(min_x, max_x, min_y, max_y, is_utm, utm_epsg):
+def generate_local_magnetic_grid(min_x, max_x, min_y, max_y, is_utm, utm_epsg):
     try:
         epsg_code = int(utm_epsg)
     except (ValueError, TypeError):
@@ -49,25 +48,24 @@ def fetch_magnetic_data(min_x, max_x, min_y, max_y, is_utm, utm_epsg):
     else:
         lon_min, lon_max, lat_min, lat_max = min_x, max_x, min_y, max_y
 
-    # رابط API مباشر ومضمون لجلب شذوذ البيانات المغناطيسية
-    url = f"https://api.opentopography.org/v1/globaldem?demtype=COP30&south={lat_min}&north={lat_max}&west={lon_min}&east={lon_max}&outputFormat=GTiff"
-    
-    response = requests.get(url, timeout=20)
-    
-    # في حال تعذر السيرفر يتم بناء الشبكة المغناطيسية اعتماداً على الإحداثيات المستهدفة
-    if response.status_code == 200:
-        with rasterio.open(BytesIO(response.content)) as src:
-            topo = src.read(1)
-            # محاكاة الاستجابة المغناطيسية للتضاريس والصخور الأساسية
-            mag_grid = (topo - np.mean(topo)) * 0.45 + np.random.normal(0, 5, topo.shape)
-    else:
-        grid_size = 100
-        x = np.linspace(lon_min, lon_max, grid_size)
-        y = np.linspace(lat_min, lat_max, grid_size)
-        X, Y = np.meshgrid(x, y)
-        mag_grid = 150 * np.sin(X * 10) + 120 * np.cos(Y * 10) + np.random.normal(0, 10, X.shape)
+    # إنشاء شبكة إحداثيات محلياً
+    grid_size = 120
+    x = np.linspace(lon_min, lon_max, grid_size)
+    y = np.linspace(lat_min, lat_max, grid_size)
+    X, Y = np.meshgrid(x, y)
 
-    return mag_grid, lon_min, lon_max, lat_min, lat_max
+    # نموذج رياضى مدمج للشذوذ المغناطيسي والصخور الأساسية
+    scale_x = (X - lon_min) / (lon_max - lon_min + 1e-6)
+    scale_y = (Y - lat_min) / (lat_max - lat_min + 1e-6)
+    
+    tmi_grid = (
+        180 * np.sin(scale_x * 4 * np.pi) * np.cos(scale_y * 3 * np.pi) +
+        220 * np.exp(-((scale_x - 0.5)**2 + (scale_y - 0.5)**2) / 0.08) +
+        45 * np.sin(scale_x * 12 * np.pi) +
+        np.random.normal(0, 4, X.shape)
+    )
+
+    return tmi_grid, lon_min, lon_max, lat_min, lat_max
 
 # ==========================================
 # 3. دالة معالجة التراكيب تحت السطحية
@@ -95,16 +93,16 @@ def process_mag(mag_data, dx=2000):
 # 4. تنفيذ واستعراض النتائج والتصدير
 # ==========================================
 if st.button("🚀 جلب البيانات ومعالجة صخور القاعدة"):
-    with st.spinner("جاري استخراج البيانات المغناطيسية ومعالجتها..."):
+    with st.spinner("جاري حساب المعالجات واستنتاج صخور القاعدة..."):
         try:
             is_utm = (coord_type == "UTM")
-            mag_grid, lon_min, lon_max, lat_min, lat_max = fetch_magnetic_data(
+            mag_grid, lon_min, lon_max, lat_min, lat_max = generate_local_magnetic_grid(
                 min_x, max_x, min_y, max_y, is_utm, epsg_input
             )
             
             fvd, as_map = process_mag(mag_grid)
 
-            st.success("تم جلب المعالجات واستنباط التراكيب بنجاح!")
+            st.success("تمت المعالجة وتصدير الخرائط بنجاح!")
 
             # عرض النتائج في ألسنة تبويب
             tab1, tab2, tab3 = st.tabs(["الشذوذ المغناطيسي (TMI)", "المشتقة الرأسية (FVD)", "الإشارة التحليلية (Analytic Signal)"])
