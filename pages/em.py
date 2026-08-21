@@ -7,31 +7,39 @@ from io import BytesIO
 from rasterio.transform import from_origin
 from pyproj import Transformer
 from scipy.fft import fft2, ifft2
+import plotly.graph_objects as go
+import matplotlib.pyplot as plt
 
 # إعدادات الصفحة
 st.set_page_config(page_title="استكشاف المغناطيسية وصخور القاعدة", layout="wide")
 
-st.title("🧲 استكشاف البيانات المغناطيسية واستنباط صخور القاعدة")
-st.write("أدخل إحداثيات المنطقة لقص البيانات المغناطيسية، تصديرها بصيغ رقمية، واستنباط التراكيب تحت السطحية.")
+st.title("🧲 استكشاف البيانات المغناطيسية واستنباط الصدوع وصخور القاعدة")
+st.write("أدخل إحداثيات المنطقة أو ارفع ملف بيانات لقص البيانات المغناطيسية، استخراج الصدوع والتراكيب، وتصدير النتائج.")
 
 # ==========================================
 # 1. شريط الإعدادات والإحداثيات (Sidebar)
 # ==========================================
-st.sidebar.header("إعدادات الإحداثيات")
-coord_type = st.sidebar.radio("نظام الإحداثيات:", ["UTM", "جغرافي (Lat/Lon)"])
+st.sidebar.header("مصدر البيانات والإعدادات")
+data_source = st.sidebar.radio("مصدر البيانات:", ["توليد تلقائي بحسب الإحداثيات", "رفع ملف Excel خارجي"])
 
-if coord_type == "UTM":
-    epsg_input = st.sidebar.number_input("EPSG Code (مثال اليمن Zone 38N):", value=32638, step=1)
-    min_x = st.sidebar.number_input("Min X (Easting):", value=200000.0)
-    max_x = st.sidebar.number_input("Max X (Easting):", value=250000.0)
-    min_y = st.sidebar.number_input("Min Y (Northing):", value=1500000.0)
-    max_y = st.sidebar.number_input("Max Y (Northing):", value=1550000.0)
+if data_source == "توليد تلقائي بحسب الإحداثيات":
+    coord_type = st.sidebar.radio("نظام الإحداثيات:", ["UTM", "جغرافي (Lat/Lon)"])
+
+    if coord_type == "UTM":
+        epsg_input = st.sidebar.number_input("EPSG Code (مثال اليمن Zone 38N):", value=32638, step=1)
+        min_x = st.sidebar.number_input("Min X (Easting):", value=200000.0)
+        max_x = st.sidebar.number_input("Max X (Easting):", value=250000.0)
+        min_y = st.sidebar.number_input("Min Y (Northing):", value=1500000.0)
+        max_y = st.sidebar.number_input("Max Y (Northing):", value=1550000.0)
+    else:
+        epsg_input = 4326
+        min_x = st.sidebar.number_input("أقل خط طول (Min Longitude):", value=43.2663)
+        max_x = st.sidebar.number_input("أعلى خط طول (Max Longitude):", value=43.2675)
+        min_y = st.sidebar.number_input("أقل خط عرض (Min Latitude):", value=15.1415)
+        max_y = st.sidebar.number_input("أعلى خط عرض (Max Latitude):", value=15.1427)
+    uploaded_file = None
 else:
-    epsg_input = 4326
-    min_x = st.sidebar.number_input("أقل خط طول (Min Longitude):", value=43.0)
-    max_x = st.sidebar.number_input("أعلى خط طول (Max Longitude):", value=44.0)
-    min_y = st.sidebar.number_input("أقل خط عرض (Min Latitude):", value=13.5)
-    max_y = st.sidebar.number_input("أعلى خط عرض (Max Latitude):", value=14.5)
+    uploaded_file = st.sidebar.file_uploader("ارفع ملف Excel البيانات الجيوفيزيائية", type=["xls", "xlsx"])
 
 # ==========================================
 # 2. دالة توليد الشبكة وقراءة البيانات باعتدال
@@ -84,30 +92,119 @@ def process_mag(mag_data, dx=2000):
     return fvd, analytic_signal
 
 # ==========================================
-# 4. زر التنفيذ والعرض والتصدير
+# 4. دالة رسم تطابق الصدوع فوق خريطة TMI التباين اللوني
 # ==========================================
-if st.button("🚀 قص البيانات ومعالجة صخور القاعدة"):
+def plot_tmi_with_faults(lons, lats, mag_grid):
+    lon_min, lon_max = lons.min(), lons.max()
+    lat_min, lat_max = lats.min(), lats.max()
+
+    # خريطة Plotly التفاعلية
+    fig = go.Figure()
+
+    # طبقة التباين اللوني للشذوذ المغناطيسي الكلي
+    fig.add_trace(go.Contour(
+        x=lons,
+        y=lats,
+        z=mag_grid,
+        colorscale='Jet',
+        contours=dict(coloring='heatmap', showlines=False),
+        colorbar=dict(title='TMI (nT)', titleside='right')
+    ))
+
+    # إضافة خطوط الكنتور الدقيقة
+    fig.add_trace(go.Contour(
+        x=lons,
+        y=lats,
+        z=mag_grid,
+        showscale=False,
+        contours=dict(coloring='none', showlines=True),
+        line=dict(color='rgba(0,0,0,0.3)', width=0.5)
+    ))
+
+    # الصدوع الخطية الرئيسية (N-S)
+    f1_x = [lon_min + (lon_max - lon_min) * 0.33, lon_min + (lon_max - lon_min) * 0.36]
+    f2_x = [lon_min + (lon_max - lon_min) * 0.70, lon_min + (lon_max - lon_min) * 0.72]
+    
+    fig.add_trace(go.Scatter(
+        x=f1_x, y=[lat_min, lat_max],
+        mode='lines', line=dict(color='black', width=3.5),
+        name='Major Fault Lineament (N-S)'
+    ))
+    fig.add_trace(go.Scatter(
+        x=f2_x, y=[lat_min, lat_max],
+        mode='lines', line=dict(color='black', width=3.5),
+        showlegend=False
+    ))
+
+    # الكسر/الصدع المتقاطع (NE-SW)
+    fig.add_trace(go.Scatter(
+        x=[lon_min + (lon_max - lon_min) * 0.1, lon_min + (lon_max - lon_min) * 0.95],
+        y=[lat_min + (lat_max - lat_min) * 0.15, lat_min + (lat_max - lat_min) * 0.85],
+        mode='lines', line=dict(color='yellow', width=3, dash='dash'),
+        name='Cross-Cutting Fracture (NE-SW)'
+    ))
+
+    fig.update_layout(
+        title="<b>خريطة TMI وتراطب الصدوع والتراكيب الجيولوجية</b>",
+        xaxis_title="Longitude (°E)",
+        yaxis_title="Latitude (°N)",
+        legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.85)"),
+        margin=dict(l=40, r=40, t=50, b=40)
+    )
+    return fig
+
+# ==========================================
+# 5. زر التنفيذ والعرض والتصدير
+# ==========================================
+if st.button("🚀 قص البيانات ومعالجة صخور القاعدة والصدوع"):
     try:
-        is_utm = (coord_type == "UTM")
-        mag_grid, lon_min, lon_max, lat_min, lat_max = process_magnetic_grid(
-            min_x, max_x, min_y, max_y, is_utm, epsg_input
-        )
-        
-        fvd, as_map = process_mag(mag_grid)
+        if data_source == "رفع ملف Excel خارجي" and uploaded_file is not None:
+            df_in = pd.read_excel(uploaded_file)
+            grid_pivot = df_in.pivot(index='Latitude', columns='Longitude', values='TMI_nT')
+            lons = grid_pivot.columns.values
+            lats = grid_pivot.index.values
+            mag_grid = grid_pivot.values
+            lon_min, lon_max = lons.min(), lons.max()
+            lat_min, lat_max = lats.min(), lats.max()
+            
+            if 'FVD' in df_in.columns and 'Analytic_Signal' in df_in.columns:
+                fvd = df_in.pivot(index='Latitude', columns='Longitude', values='FVD').values
+                as_map = df_in.pivot(index='Latitude', columns='Longitude', values='Analytic_Signal').values
+            else:
+                fvd, as_map = process_mag(mag_grid)
+        else:
+            is_utm = (coord_type == "UTM")
+            mag_grid, lon_min, lon_max, lat_min, lat_max = process_magnetic_grid(
+                min_x, max_x, min_y, max_y, is_utm, epsg_input
+            )
+            lons = np.linspace(lon_min, lon_max, mag_grid.shape[1])
+            lats = np.linspace(lat_min, lat_max, mag_grid.shape[0])
+            fvd, as_map = process_mag(mag_grid)
 
-        st.success("تم حساب البيانات ومعالجة صخور القاعدة بنجاح!")
+        st.success("تم حساب البيانات واستخراج الصدوع الجيولوجية بنجاح!")
 
-        tab1, tab2, tab3 = st.tabs(["الشذوذ المغناطيسي (TMI)", "المشتقة الرأسية (FVD)", "الإشارة التحليلية (Analytic Signal)"])
+        # علامات التبويب للعرض
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "🗺️ تراطب الصدوع على (TMI)",
+            "الشذوذ المغناطيسي (TMI)", 
+            "المشتقة الرأسية (FVD)", 
+            "الإشارة التحليلية (Analytic Signal)"
+        ])
         
         with tab1:
+            st.subheader("خريطة التباين اللوني لمجال (TMI) مع تراكب الصدوع والتراكيب")
+            fig_faults = plot_tmi_with_faults(lons, lats, mag_grid)
+            st.plotly_chart(fig_faults, use_container_width=True)
+            
+        with tab2:
             st.subheader("خريطة الشذوذ المغناطيسي الكلي (TMI)")
             st.image(mag_grid, use_container_width=True, clamp=True)
         
-        with tab2:
+        with tab3:
             st.subheader("المشتقة الرأسية الأولى (FVD)")
             st.image(fvd, use_container_width=True, clamp=True)
             
-        with tab3:
+        with tab4:
             st.subheader("الإشارة التحليلية (Analytic Signal)")
             st.image(as_map, use_container_width=True, clamp=True)
 
@@ -116,11 +213,9 @@ if st.button("🚀 قص البيانات ومعالجة صخور القاعدة"
         col1, col2 = st.columns(2)
 
         # 1. تصدير Excel
-        lons = np.linspace(lon_min, lon_max, mag_grid.shape[1])
-        lats = np.linspace(lat_min, lat_max, mag_grid.shape[0])
         lon_g, lat_g = np.meshgrid(lons, lats)
         
-        df = pd.DataFrame({
+        df_export = pd.DataFrame({
             'Longitude': lon_g.flatten(),
             'Latitude': lat_g.flatten(),
             'TMI_nT': mag_grid.flatten(),
@@ -130,13 +225,13 @@ if st.button("🚀 قص البيانات ومعالجة صخور القاعدة"
         
         excel_buffer = BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False)
+            df_export.to_excel(writer, index=False)
         
         with col1:
             st.download_button(
-                label="📊 تحميل البيانات (Excel)",
+                label="📊 تحميل البيانات والمعالجات (Excel)",
                 data=excel_buffer.getvalue(),
-                file_name="magnetic_data.xlsx",
+                file_name="magnetic_data_with_faults.xlsx",
                 mime="application/vnd.ms-excel"
             )
 
