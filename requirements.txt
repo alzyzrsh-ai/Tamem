@@ -12,3 +12,7 @@ scipy
 openpyxl
 scikit-learn
 tifffile
+xarray
+netCDF4
+pyproj
+rasterio
