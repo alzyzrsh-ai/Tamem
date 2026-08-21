@@ -8,7 +8,6 @@ from rasterio.transform import from_origin
 from pyproj import Transformer
 from scipy.fft import fft2, ifft2
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt
 
 # إعدادات الصفحة
 st.set_page_config(page_title="استكشاف المغناطيسية وصخور القاعدة", layout="wide")
@@ -92,23 +91,27 @@ def process_mag(mag_data, dx=2000):
     return fvd, analytic_signal
 
 # ==========================================
-# 4. دالة رسم تطابق الصدوع فوق خريطة TMI التباين اللوني
+# 4. دالة رسم تطابق الصدوع فوق خريطة TMI التباين اللوني (مصححة الخصائص)
 # ==========================================
 def plot_tmi_with_faults(lons, lats, mag_grid):
     lon_min, lon_max = lons.min(), lons.max()
     lat_min, lat_max = lats.min(), lats.max()
 
-    # خريطة Plotly التفاعلية
     fig = go.Figure()
 
-    # طبقة التباين اللوني للشذوذ المغناطيسي الكلي
+    # طبقة التباين اللوني للشذوذ المغناطيسي الكلي مع ضبط colorbar الصحيح دلالياً وبدون أخطاء
     fig.add_trace(go.Contour(
         x=lons,
         y=lats,
         z=mag_grid,
         colorscale='Jet',
         contours=dict(coloring='heatmap', showlines=False),
-        colorbar=dict(title='TMI (nT)', titleside='right')
+        colorbar=dict(
+            title=dict(
+                text='TMI (nT)',
+                side='right'
+            )
+        )
     ))
 
     # إضافة خطوط الكنتور الدقيقة
