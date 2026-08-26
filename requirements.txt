@@ -16,3 +16,6 @@ xarray
 netCDF4
 pyproj
 rasterio
+geopandas
+shapely
+scikit-image
