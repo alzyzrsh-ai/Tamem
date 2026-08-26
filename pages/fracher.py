@@ -1,6 +1,8 @@
 import io
+import tempfile
 import zipfile
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
 from rasterio.features import shapes
@@ -15,48 +17,59 @@ st.set_page_config(
 )
 
 st.title("🗺️ أداة استخراج وحساب الصدوع والكسور الجيولوجية")
-st.write(
-    "قم برفع ملف الراستر الثنائي (TIFF) لمعالجته وتحويله إلى شبكة متجهة (Shapefile / GeoJSON)."
-)
 
-# --- 1. رفع الملف عبر الواجهة ---
+# تهيئة Session State
+if "processed" not in st.session_state:
+    st.session_state.processed = False
+if "geojson_bytes" not in st.session_state:
+    st.session_state.geojson_bytes = None
+if "zip_bytes" not in st.session_state:
+    st.session_state.zip_bytes = None
+if "stats" not in st.session_state:
+    st.session_state.stats = {}
+if "orig_img" not in st.session_state:
+    st.session_state.orig_img = None
+if "skel_img" not in st.session_state:
+    st.session_state.skel_img = None
+
 uploaded_file = st.file_uploader(
     "ارفع ملف راستر الصدوع (TIFF / TIF)", type=["tif", "tiff"]
 )
-
-# شريط إعدادات تصفية الضوضاء
 min_noise_size = st.sidebar.slider(
-    "حد تصفية الضوضاء (أقل حجم للبكسلات):",
-    min_value=1,
-    max_value=100,
-    value=15,
+    "حد تصفية الضوضاء (أقل حجم للبكسلات):", 1, 100, 15
 )
 
 if uploaded_file is not None:
-    try:
-        # --- 2. قراءة الملف بأمان عبر MemoryFile ---
-        file_bytes = uploaded_file.read()
+    # قراءة الصورة وعرض المعاينة الأولية
+    file_bytes = uploaded_file.read()
+    with MemoryFile(file_bytes) as memfile:
+        with memfile.open() as src:
+            img = src.read(1)
+            transform = src.transform
+            crs = src.crs
 
-        with MemoryFile(file_bytes) as memfile:
-            with memfile.open() as src:
-                img = src.read(1)
-                transform = src.transform
-                crs = src.crs
+    st.success("تم رفع وقراءة ملف الراستر بنجاح!")
 
-        st.success("تم رفع وقراءة ملف الراستر بنجاح!")
+    # عرض معاينة الراستر المرفوع فوراً
+    st.subheader("🖼️ معاينة راستر المدخلات:")
+    st.image(
+        img > 0,
+        caption="راستر الصدوع الأصلي (Binary)",
+        use_container_width=True,
+        clamp=True,
+    )
 
-        if st.button("بدء معالجة واستخلاص الصدوع 🚀"):
-            with st.spinner(
-                "جاري تنظيف الضوضاء واستخلاص الهيكل المحوري..."
-            ):
-                # --- 3. تنظيف الضوضاء والتنحيف ---
+    if st.button("بدء معالجة واستخلاص الصدوع 🚀"):
+        try:
+            with st.spinner("جاري المعالجة والتنظيف وإعداد الخرائط..."):
+                # 1. المعالجة والتنظيف
                 binary_mask = img > 0
                 cleaned_mask = remove_small_objects(
                     binary_mask, min_size=min_noise_size
                 )
                 skeleton = skeletonize(cleaned_mask).astype(np.uint8)
 
-                # --- 4. التحويل إلى خطوط متجهة ---
+                # 2. تحويل إلى Vector
                 results = (
                     {"properties": {"raster_val": v}, "geometry": s}
                     for i, (s, v) in enumerate(
@@ -83,25 +96,25 @@ if uploaded_file is not None:
                         else list(merged_lines.geoms)
                     )
 
-                    # --- 5. بناء GeoDataFrame وتصحيح الإسقاط ---
                     gdf = gpd.GeoDataFrame(geometry=final_lines, crs=crs)
                     gdf["Length_m"] = gdf.length
 
-                    # تحضير GeoJSON للتحميل
+                    # 3. حفظ GeoJSON
                     if crs is not None:
                         gdf_wgs84 = gdf.to_crs(epsg=4326)
-                        geojson_bytes = gdf_wgs84.to_json()
+                        st.session_state.geojson_bytes = (
+                            gdf_wgs84.to_json().encode("utf-8")
+                        )
                     else:
-                        geojson_bytes = gdf.to_json()
+                        st.session_state.geojson_bytes = gdf.to_json().encode(
+                            "utf-8"
+                        )
 
-                    # تحضير Shapefile مضغوط (ZIP) للتحميل
+                    # 4. حفظ Shapefile ZIP
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(
                         zip_buffer, "w", zipfile.ZIP_DEFLATED
                     ) as zip_file:
-                        # إنشاء مجلد مؤقت داخل الذاكرة لحفظ عناصر الشيب فايل
-                        import tempfile
-
                         with tempfile.TemporaryDirectory() as tmpdir:
                             tmp_shp = f"{tmpdir}/Extracted_Faults.shp"
                             gdf.to_file(tmp_shp)
@@ -119,33 +132,52 @@ if uploaded_file is not None:
                                         arcname=f"Extracted_Faults{ext}",
                                     )
 
-                    st.subheader("📊 النتائج والإحصائيات:")
-                    st.write(f"عدد الصدوع المستخرجة: **{len(gdf)}**")
-                    st.write(
-                        f"إجمالي أطوال الصدوع: **{gdf['Length_m'].sum():,.2f} متر**"
-                    )
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.download_button(
-                            label="📥 تحميل GeoJSON (Google Earth/Engine)",
-                            data=geojson_bytes,
-                            file_name="Extracted_Faults_WGS84.geojson",
-                            mime="application/json",
-                        )
-                    with col2:
-                        st.download_button(
-                            label="📥 تحميل Shapefile (ArcGIS/QGIS - ZIP)",
-                            data=zip_buffer.getvalue(),
-                            file_name="Extracted_Faults_Shapefile.zip",
-                            mime="application/zip",
-                        )
+                    st.session_state.zip_bytes = zip_buffer.getvalue()
+                    st.session_state.stats = {
+                        "count": len(gdf),
+                        "length": gdf["Length_m"].sum(),
+                    }
+                    st.session_state.skel_img = skeleton
+                    st.session_state.processed = True
                 else:
                     st.warning(
-                        "لم يتم العثور على أجزاء خطية بعد التصفية. جرب تقليل حد تصفية الضوضاء."
+                        "لم يتم استخراج أية خطوط، حاول تقليل حد تصفية الضوضاء."
                     )
 
-    except Exception as e:
-        st.error(f"حدث خطأ أثناء معالجة الملف: {str(e)}")
-else:
-    st.info("يرجى رفع ملف TIFF للبدء.")
+        except Exception as e:
+            st.error(f"حدث خطأ أثناء المعالجة: {str(e)}")
+
+    # عرض الخرائط والنتائج بعد المعالجة
+    if st.session_state.processed:
+        st.subheader("🗺️ صورة الصدوع بعد التنظيف والتنحيف (Skeleton):")
+        st.image(
+            st.session_state.skel_img,
+            caption="شبكة الصدوع المستخرجة (بكسل واحد)",
+            use_container_width=True,
+            clamp=True,
+        )
+
+        st.success("تم استخراج الصدوع بنجاح!")
+        st.subheader("📊 النتائج الإحصائية:")
+        st.write(
+            f"عدد الصدوع المستخرجة: **{st.session_state.stats['count']}**"
+        )
+        st.write(
+            f"إجمالي الأطوال: **{st.session_state.stats['length']:,.2f} متر**"
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                label="📥 تحميل GeoJSON",
+                data=st.session_state.geojson_bytes,
+                file_name="Extracted_Faults_WGS84.geojson",
+                mime="application/json",
+            )
+        with col2:
+            st.download_button(
+                label="📥 تحميل Shapefile (ZIP)",
+                data=st.session_state.zip_bytes,
+                file_name="Extracted_Faults_Shapefile.zip",
+                mime="application/zip",
+            )
