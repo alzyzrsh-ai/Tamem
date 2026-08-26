@@ -27,10 +27,27 @@ if "zip_bytes" not in st.session_state:
     st.session_state.zip_bytes = None
 if "stats" not in st.session_state:
     st.session_state.stats = {}
-if "orig_img" not in st.session_state:
-    st.session_state.orig_img = None
-if "skel_img" not in st.session_state:
-    st.session_state.skel_img = None
+if "fig_orig" not in st.session_state:
+    st.session_state.fig_orig = None
+if "fig_skel" not in st.session_state:
+    st.session_state.fig_skel = None
+
+
+# دالة تحويل المصفوفة إلى صورة واضحة ومتباينة باستخدام Matplotlib
+def create_image_plot(data_array, title, line_color="cyan"):
+    fig, ax = plt.subplots(figsize=(8, 8))
+    # عرض الخلفية سوداء والخطوط بلون واضح جدًا (Cyan أو أبيض أو أحمر)
+    ax.imshow(data_array, cmap="gray", vmin=0, vmax=1)
+    # تظليل الصدوع بلون بارز
+    y, x = np.where(data_array > 0)
+    ax.scatter(x, y, c=line_color, s=1, marker="s")
+    ax.set_title(title, color="white", fontsize=14)
+    ax.axis("off")
+    fig.patch.set_facecolor("black")
+    ax.set_facecolor("black")
+    plt.tight_layout()
+    return fig
+
 
 uploaded_file = st.file_uploader(
     "ارفع ملف راستر الصدوع (TIFF / TIF)", type=["tif", "tiff"]
@@ -40,7 +57,6 @@ min_noise_size = st.sidebar.slider(
 )
 
 if uploaded_file is not None:
-    # قراءة الصورة وعرض المعاينة الأولية
     file_bytes = uploaded_file.read()
     with MemoryFile(file_bytes) as memfile:
         with memfile.open() as src:
@@ -50,14 +66,12 @@ if uploaded_file is not None:
 
     st.success("تم رفع وقراءة ملف الراستر بنجاح!")
 
-    # عرض معاينة الراستر المرفوع فوراً
+    # عرض المعاينة الأولية
     st.subheader("🖼️ معاينة راستر المدخلات:")
-    st.image(
-        img > 0,
-        caption="راستر الصدوع الأصلي (Binary)",
-        use_container_width=True,
-        clamp=True,
+    fig_input = create_image_plot(
+        img > 0, "راستر الصدوع الأصلي", line_color="white"
     )
+    st.pyplot(fig_input)
 
     if st.button("بدء معالجة واستخلاص الصدوع 🚀"):
         try:
@@ -137,7 +151,11 @@ if uploaded_file is not None:
                         "count": len(gdf),
                         "length": gdf["Length_m"].sum(),
                     }
-                    st.session_state.skel_img = skeleton
+                    st.session_state.fig_skel = create_image_plot(
+                        skeleton,
+                        "شبكة الصدوع المستخرجة (Skeleton)",
+                        line_color="cyan",
+                    )
                     st.session_state.processed = True
                 else:
                     st.warning(
@@ -147,15 +165,10 @@ if uploaded_file is not None:
         except Exception as e:
             st.error(f"حدث خطأ أثناء المعالجة: {str(e)}")
 
-    # عرض الخرائط والنتائج بعد المعالجة
+    # عرض الصورة والنتائج بعد معالجة الزر
     if st.session_state.processed:
-        st.subheader("🗺️ صورة الصدوع بعد التنظيف والتنحيف (Skeleton):")
-        st.image(
-            st.session_state.skel_img,
-            caption="شبكة الصدوع المستخرجة (بكسل واحد)",
-            use_container_width=True,
-            clamp=True,
-        )
+        st.subheader("🗺️ صورة الصدوع بعد التنظيف والتنحيف:")
+        st.pyplot(st.session_state.fig_skel)
 
         st.success("تم استخراج الصدوع بنجاح!")
         st.subheader("📊 النتائج الإحصائية:")
