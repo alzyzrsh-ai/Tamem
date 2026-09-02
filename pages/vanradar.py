@@ -1,74 +1,62 @@
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
 from scipy.ndimage import median_filter
+import streamlit as st
 
+st.title("تحليل قنوات الحصى من صور SAR")
 
-def process_sar_gravel_channels(input_tif_path, output_tif_path=None):
-    # 1. قراءة الملف الراداري واستخراج الإسقاط الجغرافي
-    with rasterio.open(input_tif_path) as src:
-        sar_band = src.read(1)
-        profile = src.profile.copy()
+# 1. زر رفع الملف في الواجهة
+uploaded_file = st.file_uploader(
+    "قم برفع ملف GeoTIFF الخاص بالرادار", type=["tif", "tiff"]
+)
 
-    # 2. تنظيف الضوضاء الرادارية (Speckle Noise Filtering)
-    # فلتر الميديان يحافظ على حواف القنوات ويتخلص من النقاط العشوائية
-    denoised_band = median_filter(sar_band, size=3)
+if uploaded_file is not None:
+    try:
+        # قراءة البيانات مباشرة من الذاكرة
+        with rasterio.open(uploaded_file) as src:
+            sar_band = src.read(1)
 
-    # 3. تحسين التباين (Contrast Stretching / Percentile Clipping)
-    valid_pixels = denoised_band[np.isfinite(denoised_band)]
-    p2, p98 = np.percentile(valid_pixels, (2, 98))
-    clipped_band = np.clip(denoised_band, p2, p98)
+        # 2. التصفية وتحسين التباين
+        denoised_band = median_filter(sar_band, size=3)
 
-    # تحويل البيانات إلى نطاق 8-bit (0-255) لمعالجتها بواسطة OpenCV
-    norm_band = cv2.normalize(
-        clipped_band, None, 0, 255, cv2.NORM_MINMAX
-    ).astype(np.uint8)
+        valid_pixels = denoised_band[np.isfinite(denoised_band)]
+        if len(valid_pixels) > 0:
+            p2, p98 = np.percentile(valid_pixels, (2, 98))
+            clipped_band = np.clip(denoised_band, p2, p98)
 
-    # 4. عزل الانعكاسات العالية (High Backscatter Thresholding)
-    # استخدام خوارزمية Otsu لتحديد الحد الفاصل تلقائياً بين الحصى الخشن والطين الأملس
-    _, binary_gravel_mask = cv2.threshold(
-        norm_band, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
+            norm_band = cv2.normalize(
+                clipped_band, None, 0, 255, cv2.NORM_MINMAX
+            ).astype(np.uint8)
 
-    # 5. تحسين شكل القنوات بالمورفولوجيا الرقمية (Morphological Operations)
-    kernel_clean = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    kernel_connect = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+            # 3. عزل الانعكاسات العالية (Otsu)
+            _, binary_gravel_mask = cv2.threshold(
+                norm_band, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
 
-    # إزالة التشويش النقطي الصغير
-    cleaned_mask = cv2.morphologyEx(
-        binary_gravel_mask, cv2.MORPH_OPEN, kernel_clean
-    )
-    # ربط الفجوات بين أجزاء القنوات الحصوية المقطعة
-    final_channels_mask = cv2.morphologyEx(
-        cleaned_mask, cv2.MORPH_CLOSE, kernel_connect
-    )
+            # 4. العمليات المورفولوجية
+            kernel_clean = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            kernel_connect = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
 
-    # 6. تصدير النتيجة كملف GeoTIFF جغرافي مُسند
-    if output_tif_path:
-        profile.update(dtype=rasterio.uint8, count=1, nodata=0)
-        with rasterio.open(output_tif_path, "w", **profile) as dst:
-            dst.write(final_channels_mask, 1)
-        print(f"تم تصدير قنوات الحصى الجغرافية بنجاح إلى: {output_tif_path}")
+            cleaned_mask = cv2.morphologyEx(
+                binary_gravel_mask, cv2.MORPH_OPEN, kernel_clean
+            )
+            final_mask = cv2.morphologyEx(
+                cleaned_mask, cv2.MORPH_CLOSE, kernel_connect
+            )
 
-    # 7. عرض النتائج
-    plt.figure(figsize=(12, 6))
+            # 5. عرض النتائج داخل Streamlit
+            col1, col2 = st.columns(2)
 
-    plt.subplot(1, 2, 1)
-    plt.imshow(norm_band, cmap="gray")
-    plt.title("الصورة الرادارية الأصلية (SAR Intensity)")
-    plt.axis("off")
+            with col1:
+                st.subheader("الصورة الرادارية الأصلية")
+                st.image(norm_band, use_column_width=True)
 
-    plt.subplot(1, 2, 2)
-    plt.imshow(final_channels_mask, cmap="cyan")
-    plt.title("نطاقات الحصى وقنوات الأودية المستخرجة")
-    plt.axis("off")
+            with col2:
+                st.subheader("قنوات الحصى المستخرجة")
+                st.image(final_mask, use_column_width=True)
 
-    plt.tight_layout()
-    plt.show()
-
-    return final_channels_mask
-
-
-# تشغيل الكود على الملف الخاص بك
-# process_sar_gravel_channels('Alؤاداريه القدميProject_Map (6).tif', 'Gravel_Channels_Output.tif')
+    except Exception as e:
+        st.error(f"حدث خطأ أثناء معالجة الملف: {e}")
+else:
+    st.info("يرجى رفع ملف TIFF للبدء في المعالجة.")
