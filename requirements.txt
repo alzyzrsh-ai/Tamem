@@ -20,3 +20,4 @@ geopandas
 shapely
 scikit-image
 opencv-python-headless
+earthengine-api
