@@ -3,13 +3,29 @@ import zipfile
 import tempfile
 import numpy as np
 import geopandas as gpd
-from shapely.geometry import LineString, Polygon, MultiPolygon
+from shapely.geometry import LineString
 from sklearn.decomposition import PCA
 from skimage.morphology import skeletonize
 from skimage.filters import sobel
 import matplotlib.pyplot as plt
 import streamlit as st
 import ee
+
+# --- معالجة آمنة لتفعيل سواقات KML بدون AttributeError ---
+try:
+    import fiona
+    fiona.drvsupport.supported_drivers['KML'] = 'rw'
+    fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
+except Exception:
+    pass
+
+try:
+    import geopandas.io.file
+    if hasattr(geopandas.io.file, 'fiona'):
+        geopandas.io.file.fiona.drvsupport.supported_drivers['KML'] = 'rw'
+        geopandas.io.file.fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
+except Exception:
+    pass
 
 # --- معالجة استدعاء الدالة لضمان التوافق مع Streamlit Cloud ---
 try:
@@ -20,21 +36,16 @@ except ImportError:
     except ImportError:
         from skimage.filters import frangi as meijering
 
-# تفعيل قراءة KML/KMZ في GeoPandas
-gpd.io.file.fiona.drvsupport.supported_drivers['KML'] = 'rw'
-gpd.io.file.fiona.drvsupport.supported_drivers['LIBKML'] = 'rw'
-
 # إعدادات الصفحة
 st.set_page_config(page_title="منظومة كشف القواطع - التلقائية عبر GEE", layout="wide")
 
 st.title("🌋 منظومة كشف القواطع النارية (سحب واستخراج تلقائي)")
-st.markdown("ارفع ملف **KML/KMZ** الخاص بالمنطقة فقط، وسيتم جلب الحزم الفضائية (Sentinel-2 / Landsat / DEM) ومعالجتها سحابياً آلياً عبر Google Earth Engine.")
+st.markdown("ارفع ملف **KML/KMZ** الخاص بالمنطقة فقط، وسيتم جلب الحزم الفضائية ومعالجتها سحابياً آلياً عبر Google Earth Engine.")
 
 # --- تهيئة Google Earth Engine ---
 @st.cache_resource
 def init_gee():
     try:
-        # استخدام Service Account أو المفتاح السحابي من Streamlit Secrets إذا توفر
         if "GEE_JSON" in st.secrets:
             import json
             key_dict = json.loads(st.secrets["GEE_JSON"])
@@ -57,6 +68,13 @@ st.sidebar.header("⚙️ 2. إعدادات السحب")
 cloud_cover = st.sidebar.slider("أقصى نسبة غيوم مقبول (%):", 0, 30, 10)
 date_range = st.sidebar.date_input("الفترة الزمنية للالتقاط:", [np.datetime64('2023-01-01'), np.datetime64('2026-01-01')])
 
+# دالة آمنة لقراءة KML/KMZ
+def read_kml_safely(file_path):
+    try:
+        return gpd.read_file(file_path, engine="fiona")
+    except Exception:
+        return gpd.read_file(file_path)
+
 # --- التنفيذ ---
 if st.button("🚀 سحب البيانات ومعالجة القواطع تلقائياً"):
     if not gee_ready:
@@ -66,7 +84,6 @@ if st.button("🚀 سحب البيانات ومعالجة القواطع تلق�
     else:
         with st.spinner("جاري سحب الحزم طيفياً وحرارياً وتضاريسياً من Google Earth Engine..."):
             with tempfile.TemporaryDirectory() as tmpdir:
-                # 1. حفظ وفحص KML/KMZ
                 kml_path = os.path.join(tmpdir, uploaded_kml.name)
                 with open(kml_path, "wb") as f:
                     f.write(uploaded_kml.getbuffer())
@@ -79,13 +96,12 @@ if st.button("🚀 سحب البيانات ومعالجة القواطع تلق�
                                 kml_path = os.path.join(tmpdir, file)
                                 break
 
-                aoi_gdf = gpd.read_file(kml_path).to_crs("EPSG:4326")
+                aoi_gdf = read_kml_safely(kml_path).to_crs("EPSG:4326")
                 bounds = aoi_gdf.total_bounds # [minx, miny, maxx, maxy]
                 
                 ee_geometry = ee.Geometry.Rectangle([bounds[0], bounds[1], bounds[2], bounds[3]])
 
-                # 2. جلب المرئيات تلقائياً من GEE
-                # أ) Sentinel-2 (SWIR2, SWIR1, NIR, RED)
+                # سحب البيانات سحابياً
                 s2_collection = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
                                  .filterBounds(ee_geometry)
                                  .filterDate(str(date_range[0]), str(date_range[1]))
@@ -93,10 +109,8 @@ if st.button("🚀 سحب البيانات ومعالجة القواطع تلق�
                                  .median()
                                  .clip(ee_geometry))
 
-                # ب) DEM (Copernicus 30m)
                 dem = ee.Image("COPERNICUS/DEM/GLO30").select('DEM').clip(ee_geometry)
 
-                # ج) Landsat 8 (الحزمة الحرارية Band 10)
                 l8_thermal = (ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
                               .filterBounds(ee_geometry)
                               .filterDate(str(date_range[0]), str(date_range[1]))
@@ -104,11 +118,9 @@ if st.button("🚀 سحب البيانات ومعالجة القواطع تلق�
                               .select('ST_B10')
                               .clip(ee_geometry))
 
-                # 3. حساب النطاقات والمؤشرات داخل GEE
                 ferrous = s2_collection.select('B12').divide(s2_collection.select('B11').add(0.0001))
                 ndvi = s2_collection.normalizedDifference(['B8', 'B4'])
 
-                # تجميع الحزم في صورة واحدة
                 stacked_ee = ee.Image.cat([
                     s2_collection.select('B12').rename('swir2'),
                     s2_collection.select('B11').rename('swir1'),
@@ -120,7 +132,6 @@ if st.button("🚀 سحب البيانات ومعالجة القواطع تلق�
                     l8_thermal.rename('thermal')
                 ])
 
-                # 4. تحويل المصفوفة إلى Numpy للتحليل التراكبي
                 url = stacked_ee.getDownloadURL({
                     'scale': 30,
                     'crs': 'EPSG:4326',
@@ -128,7 +139,6 @@ if st.button("🚀 سحب البيانات ومعالجة القواطع تلق�
                     'format': 'NPY'
                 })
 
-                # جلب البيانات إلى الذاكرة
                 import urllib.request
                 npy_path = os.path.join(tmpdir, "data.npy")
                 urllib.request.urlretrieve(url, npy_path)
@@ -144,7 +154,7 @@ if st.button("🚀 سحب البيانات ومعالجة القواطع تلق�
                 dem_arr = data_dict['dem'].astype(np.float32)
                 thermal_arr = data_dict['thermal'].astype(np.float32)
 
-                # 5. المعالجة الطيفية المتقدمة والهيكلية (PCA + Sobel + Meijering)
+                # المعالجة والـ PCA
                 np.seterr(divide='ignore', invalid='ignore')
                 
                 thermal_norm = np.nan_to_num((thermal_arr - np.nanmin(thermal_arr)) / (np.nanmax(thermal_arr) - np.nanmin(thermal_arr) + 1e-5))
@@ -170,12 +180,11 @@ if st.button("🚀 سحب البيانات ومعالجة القواطع تلق�
                 binary_lineaments = ridges > np.percentile(ridges, 93)
                 skeleton = skeletonize(binary_lineaments)
 
-                # 6. تحويل الناتج إلى شبكة متجهات مصححة
+                # بناء الشبكة الجغرافية
                 lines = []
                 angles = []
                 rows, cols = np.where(skeleton)
 
-                # حساب تحويل الإحداثيات بالنسبة للشبكة الجغرافية
                 lon_step = (bounds[2] - bounds[0]) / w
                 lat_step = (bounds[3] - bounds[1]) / h
 
@@ -196,11 +205,9 @@ if st.button("🚀 سحب البيانات ومعالجة القواطع تلق�
                     gdf = gpd.GeoDataFrame(geometry=lines, crs="EPSG:4326")
                     gdf = gdf.dissolve()
 
-                    # تصدير GeoJSON
                     geojson_path = os.path.join(tmpdir, "extracted_dykes_gee.geojson")
                     gdf.to_file(geojson_path, driver="GeoJSON")
 
-                    # تصدير Shapefile في ملف ZIP
                     shp_dir = os.path.join(tmpdir, "dyke_shapefile_gee")
                     os.makedirs(shp_dir, exist_ok=True)
                     shp_path = os.path.join(shp_dir, "extracted_dykes_gee.shp")
@@ -232,7 +239,6 @@ if st.button("🚀 سحب البيانات ومعالجة القواطع تلق�
                                 mime="application/geo+json"
                             )
 
-                    # 7. رسم مخطط الوردة الاتجاهي
                     if angles:
                         st.subheader("📊 مخطط الوردة الاتجاهي للنطاق المجلوب")
                         radii, edges = np.histogram(angles, bins=36, range=(0, 360))
