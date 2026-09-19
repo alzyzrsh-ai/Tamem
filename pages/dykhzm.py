@@ -187,7 +187,6 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                     else:
                         item = items[0]
                         
-                        # دالة سحب وصياغة الحزم
                         def fetch_band(asset_key, target_shape=None):
                             href = item.assets[asset_key].href
                             with rasterio.open(href) as src:
@@ -210,7 +209,7 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
 
                         np.seterr(divide='ignore', invalid='ignore')
 
-                        # المعالجة
+                        # المعالجة والتحليل الطيفي
                         ferrous_index = np.where(swir1 == 0, 0, swir2 / (swir1 + 1e-5))
                         ndvi = np.where((nir + red) == 0, 0, (nir - red) / (nir + red + 1e-5))
 
@@ -232,7 +231,7 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                         binary_lineaments = ridges > np.percentile(ridges, 93)
                         skeleton = skeletonize(binary_lineaments)
 
-                        # استخراج الخطوط
+                        # استخراج الخطوط المتجهة
                         lines = []
                         angles = []
                         rows, cols = np.where(skeleton)
@@ -247,48 +246,81 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                             angle = np.degrees(np.arctan2(dx, dy)) % 360
                             angles.append(angle)
 
-                        st.success("✅ تم جلب الحزم واستخراج القواطع بنجاح!")
+                        st.success("✅ تم جلب المرئيات وتنسيق الأبعاد واكتشاف القواطع بنجاح!")
 
-                        # --- قسم 1: معاينة وتنزيل الحزم الفضائية المجلوبة ---
+                        # --- قسم 1: معاينة وتنزيل الحزم الفضائية بصيغة GeoTIFF ---
                         st.subheader("📡 الحزم الفضائية المجلوبة (Sentinel-2)")
-                        tab1, tab2, tab3, tab4 = st.tabs(["الحزمة B12 (SWIR2)", "الحزمة B11 (SWIR1)", "الحزمة B08 (NIR)", "الحزمة B04 (Red)"])
-                        
+                        tab1, tab2, tab3, tab4 = st.tabs([
+                            "الحزمة B12 (SWIR2)", 
+                            "الحزمة B11 (SWIR1)", 
+                            "الحزمة B08 (NIR - الأشعة تحت الحمراء القريبة)", 
+                            "الحزمة B04 (Red)"
+                        ])
+
+                        def create_geotiff_download(band_data, profile, file_name, label):
+                            tmp_tif_path = os.path.join(tmpdir, file_name)
+                            profile_copy = profile.copy()
+                            profile_copy.update(
+                                dtype=rasterio.float32,
+                                count=1,
+                                driver='GTiff'
+                            )
+                            with rasterio.open(tmp_tif_path, 'w', **profile_copy) as dst:
+                                dst.write(band_data, 1)
+                                
+                            with open(tmp_tif_path, "rb") as f:
+                                st.download_button(
+                                    label=f"💾 تنزيل {label} بصيغة GeoTIFF (GIS)",
+                                    data=f.read(),
+                                    file_name=file_name,
+                                    mime="image/tiff"
+                                )
+
+                        raster_profile = {
+                            'crs': raster_crs,
+                            'transform': transform,
+                            'width': ref_shape[1],
+                            'height': ref_shape[0]
+                        }
+
                         with tab1:
                             fig_b12, ax_b12 = plt.subplots(figsize=(6, 4))
                             im12 = ax_b12.imshow(swir2, cmap='gray')
                             plt.colorbar(im12, ax=ax_b12)
                             st.pyplot(fig_b12)
-                        
+                            create_geotiff_download(swir2, raster_profile, "Sentinel2_B12_SWIR2.tif", "حزمة SWIR2 (B12)")
+
                         with tab2:
                             fig_b11, ax_b11 = plt.subplots(figsize=(6, 4))
                             im11 = ax_b11.imshow(swir1, cmap='gray')
                             plt.colorbar(im11, ax=ax_b11)
                             st.pyplot(fig_b11)
+                            create_geotiff_download(swir1, raster_profile, "Sentinel2_B11_SWIR1.tif", "حزمة SWIR1 (B11)")
 
                         with tab3:
                             fig_b8, ax_b8 = plt.subplots(figsize=(6, 4))
                             im8 = ax_b8.imshow(nir, cmap='gray')
                             plt.colorbar(im8, ax=ax_b8)
                             st.pyplot(fig_b8)
+                            create_geotiff_download(nir, raster_profile, "Sentinel2_B08_NIR.tif", "حزمة الأشعة تحت الحمراء B08 (NIR)")
 
                         with tab4:
                             fig_b4, ax_b4 = plt.subplots(figsize=(6, 4))
                             im4 = ax_b4.imshow(red, cmap='gray')
                             plt.colorbar(im4, ax=ax_b4)
                             st.pyplot(fig_b4)
+                            create_geotiff_download(red, raster_profile, "Sentinel2_B04_Red.tif", "الحزمة الحمراء B04 (Red)")
 
-                        # --- قسم 2: خريطة الإسقاط الميداني للتطبيقات والمواقع ---
+                        # --- قسم 2: خريطة الإسقاط وتصدير Shapefile ---
                         if lines:
                             gdf = gpd.GeoDataFrame(geometry=lines, crs=raster_crs)
                             gdf_wgs84 = gdf.to_crs("EPSG:4326")
 
                             st.subheader("🗺️ إسقاط القواطع المكتشفة على خريطة المنطقة")
                             
-                            # تحديد مركز الخريطة
                             centroid = aoi_gdf.unary_union.centroid
-                            m = folium.Map(location=[centroid.y, centroid.x], zoom_start=13, tiles="OpenStreetMap")
+                            m = folium.Map(location=[centroid.y, centroid.x], zoom_start=13)
                             
-                            # إضافة صور القمار الصناعية ESRI Satellite كطبقة أساسية
                             folium.TileLayer(
                                 tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                                 attr='Esri',
@@ -297,7 +329,6 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                                 control=True
                             ).add_to(m)
 
-                            # رسم القواطع باللون الأحمر على الخريطة
                             folium.GeoJson(
                                 gdf_wgs84,
                                 name="القواطع النارية المكتشفة",
@@ -307,23 +338,23 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                             folium.LayerControl().add_to(m)
                             st_folium(m, width=900, height=500)
 
-                            # ملف التنزيل SHP
                             zip_path = os.path.join(tmpdir, "dykes_auto.zip")
                             shp_dir = os.path.join(tmpdir, "shp")
                             os.makedirs(shp_dir, exist_ok=True)
                             gdf.to_file(os.path.join(shp_dir, "dykes.shp"), driver="ESRI Shapefile")
 
                             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                                for root, _, files in os.walk(shp_dir):
+                                for root_dir, _, files in os.walk(shp_dir):
                                     for file in files:
-                                        zipf.write(os.path.join(root, file), file)
+                                        zipf.write(os.path.join(root_dir, file), file)
 
-                            st.download_button(
-                                label="📥 تحميل Shapefile المكتشف (ZIP)",
-                                data=open(zip_path, "rb"),
-                                file_name="extracted_dykes.zip",
-                                mime="application/zip"
-                            )
+                            with open(zip_path, "rb") as fp:
+                                st.download_button(
+                                    label="📥 تحميل Shapefile المكتشف (ZIP)",
+                                    data=fp,
+                                    file_name="extracted_dykes.zip",
+                                    mime="application/zip"
+                                )
 
                             if angles:
                                 st.subheader("📊 مخطط الوردة الاتجاهي")
