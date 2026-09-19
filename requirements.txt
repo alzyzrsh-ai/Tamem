@@ -21,3 +21,4 @@ shapely
 scikit-image
 opencv-python-headless
 earthengine-api
+planetary-computer
