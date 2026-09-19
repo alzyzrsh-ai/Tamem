@@ -2,6 +2,7 @@ import os
 import re
 import zipfile
 import tempfile
+import xml.etree.ElementTree as ET
 from datetime import date
 import numpy as np
 import geopandas as gpd
@@ -47,13 +48,13 @@ st.sidebar.header("⚙️ 2. خيارات السحب")
 date_range = st.sidebar.date_input("الفترة الزمنية للمرئيات:", [date(2023, 1, 1), date(2026, 1, 1)])
 max_cloud = st.sidebar.slider("أقصى نسبة غيوم مقبول (%):", 0, 20, 10)
 
-# --- دالة شاملة لقراءة جميع أنواع ملفات AlpineQuest و KML ---
+# --- دالة شاملة ومحدثة لقراءة كافة صيغ AlpineQuest و KML المعقدة ---
 def load_aoi_file(file_bytes, file_name, tmpdir):
     file_path = os.path.join(tmpdir, file_name)
     with open(file_path, "wb") as f:
         f.write(file_bytes)
 
-    # 1. فتح ملفات KMZ المضغوطة
+    # 1. تفكيك ملفات KMZ المضغوطة
     if file_name.lower().endswith(".kmz"):
         try:
             with zipfile.ZipFile(file_path, 'r') as zip_ref:
@@ -65,7 +66,7 @@ def load_aoi_file(file_bytes, file_name, tmpdir):
         except Exception:
             pass
 
-    # 2. القراءة القياسية عبر GeoPandas
+    # 2. المحاولة الأولى: القراءة المباشرة عبر GeoPandas
     try:
         return gpd.read_file(file_path, engine="fiona")
     except Exception:
@@ -74,27 +75,50 @@ def load_aoi_file(file_bytes, file_name, tmpdir):
         except Exception:
             pass
 
-    # 3. معالج خاص لملفات AlpineQuest الثنائية (.wpt / .ldk)
+    # 3. المحاولة الثانية: تحليل KML / XML عبر ElementTree لوسوم الإحداثيات
     coords = []
     try:
-        content = file_bytes.decode('latin-1', errors='ignore')
-        matches = re.findall(r'([-+]?\d{1,2}\.\d{4,8})[\s,]+([-+]?\d{1,3}\.\d{4,8})', content)
-        for lat, lon in matches:
-            lat_f, lon_f = float(lat), float(lon)
-            if -90 <= lat_f <= 90 and -180 <= lon_f <= 180:
-                coords.append((lon_f, lat_f))
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+        for elem in root.iter():
+            if elem.tag.endswith('coordinates') and elem.text:
+                raw_coords = elem.text.strip().split()
+                for c in raw_coords:
+                    parts = c.split(',')
+                    if len(parts) >= 2:
+                        lon, lat = float(parts[0]), float(parts[1])
+                        if -180 <= lon <= 180 and -90 <= lat <= 90:
+                            coords.append((lon, lat))
     except Exception:
         pass
 
+    # 4. المحاولة الثالثة: مسح نصي عام لجميع ملفات WPT و KML المعقدة
+    if not coords:
+        try:
+            content = file_bytes.decode('utf-8', errors='ignore')
+            if not content:
+                content = file_bytes.decode('latin-1', errors='ignore')
+            
+            matches = re.findall(r'([-+]?\d{1,3}\.\d{3,10})[\s,]+([-+]?\d{1,2}\.\d{3,10})', content)
+            for val1, val2 in matches:
+                v1, v2 = float(val1), float(val2)
+                if -180 <= v1 <= 180 and -90 <= v2 <= 90:
+                    coords.append((v1, v2))
+                elif -180 <= v2 <= 180 and -90 <= v1 <= 90:
+                    coords.append((v2, v1))
+        except Exception:
+            pass
+
+    # 5. بناء الشكل الهندسي وتأمين جلب المرئيات
     if len(coords) >= 3:
         poly = Polygon(coords)
         return gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
     elif len(coords) >= 1:
         pt = Point(coords[0])
-        poly = pt.buffer(0.01) # نطاق تقريبي ~1 كم
+        poly = pt.buffer(0.02)
         return gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
     else:
-        raise ValueError("تعذر استخراج الإحداثيات من الملف المرفوع. يرجى التأكد من تصدير الملف بصيغة KML من داخل التطبيق.")
+        raise ValueError("تعذر قراءة الإحداثيات. يرجى إعادة تصدير الملف بصيغة KML أو KMZ قياسية من AlpineQuest.")
 
 # --- التنفيذ التلقائي ---
 if st.button("🚀 جلب الحزم تلقائياً واستخراج القواطع"):
