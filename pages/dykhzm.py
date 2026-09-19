@@ -8,7 +8,7 @@ import numpy as np
 import geopandas as gpd
 import rasterio
 from rasterio.mask import mask
-from rasterio.enums import Resampling
+from scipy.ndimage import zoom
 from shapely.geometry import LineString, Point, Polygon, box
 from sklearn.decomposition import PCA
 from skimage.morphology import skeletonize
@@ -16,7 +16,9 @@ from skimage.filters import sobel
 import matplotlib.pyplot as plt
 import streamlit as st
 
-# مكتبات الجلب التلقائي السحابي
+# مكتبات العرض الخرائطي والجلب
+import folium
+from streamlit_folium import st_folium
 import pystac_client
 import planetary_computer
 
@@ -71,7 +73,6 @@ st.sidebar.header("⚙️ 2. خيارات السحب")
 date_range = st.sidebar.date_input("الفترة الزمنية للمرئيات:", [date(2023, 1, 1), date(2026, 1, 1)])
 max_cloud = st.sidebar.slider("أقصى نسبة غيوم مقبول (%):", 0, 20, 10)
 
-# --- دالة قراءة ملفات AlpineQuest و KML ---
 def load_aoi_file(file_bytes, file_name, tmpdir):
     file_path = os.path.join(tmpdir, file_name)
     with open(file_path, "wb") as f:
@@ -138,7 +139,6 @@ def load_aoi_file(file_bytes, file_name, tmpdir):
     else:
         raise ValueError("تعذر قراءة الملف. يرجى استخدام خيار 'إدخال إحداثيات يدوياً' من القائمة الجانبية.")
 
-# --- بناء GeoDataFrame اليدوي ---
 def build_manual_gdf():
     if manual_mode == "نقطة مركزية + نصف قطر (كم)":
         pt = Point(lon_center, lat_center)
@@ -159,7 +159,6 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
         with st.spinner("جاري إعداد المنطقة وسحب الحزم الفضائية (Sentinel-2) سحابياً..."):
             with tempfile.TemporaryDirectory() as tmpdir:
                 try:
-                    # 1. تحديد حدود المنطقة
                     if input_method == "رفع ملف (KML / KMZ / WPT)":
                         aoi_gdf = load_aoi_file(uploaded_aoi.getbuffer(), uploaded_aoi.name, tmpdir).to_crs("EPSG:4326")
                     else:
@@ -167,7 +166,6 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
 
                     bounds = list(aoi_gdf.total_bounds)
 
-                    # 2. البحث عن مرئيات Sentinel-2 سحابياً
                     catalog = pystac_client.Client.open(
                         "https://planetarycomputer.microsoft.com/api/stac/v1",
                         modifier=planetary_computer.sign_inplace,
@@ -189,26 +187,22 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                     else:
                         item = items[0]
                         
-                        # 3. دالة جلب الحزم الصحيحة بدون أخطاء المعاملات
+                        # دالة سحب وصياغة الحزم
                         def fetch_band(asset_key, target_shape=None):
                             href = item.assets[asset_key].href
                             with rasterio.open(href) as src:
                                 aoi_reprojected = aoi_gdf.to_crs(src.crs)
                                 geom = [aoi_reprojected.geometry.iloc[0]] if aoi_reprojected.geometry.iloc[0].geom_type in ['Polygon', 'MultiPolygon'] else [aoi_reprojected.unary_union.convex_hull]
                                 
-                                # قص المرئية أولاً
                                 data, out_transform = mask(src, geom, crop=True)
                                 band_data = data[0].astype(np.float32)
 
-                                # إعادة تشكيل الأبعاد إن طُلِب ذلك
                                 if target_shape is not None and band_data.shape != target_shape:
-                                    from scipy.ndimage import zoom
                                     zoom_factors = (target_shape[0] / band_data.shape[0], target_shape[1] / band_data.shape[1])
                                     band_data = zoom(band_data, zoom_factors, order=1)
 
                                 return band_data, out_transform, src.crs, band_data.shape
 
-                        # جلب B12 أولاً واعتماد أبعادها كمرجع قياسي
                         swir2, transform, raster_crs, ref_shape = fetch_band("B12")
                         swir1, _, _, _ = fetch_band("B11", target_shape=ref_shape)
                         nir, _, _, _ = fetch_band("B08", target_shape=ref_shape)
@@ -216,7 +210,7 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
 
                         np.seterr(divide='ignore', invalid='ignore')
 
-                        # 4. المعالجة والتحليل الطيفي
+                        # المعالجة
                         ferrous_index = np.where(swir1 == 0, 0, swir2 / (swir1 + 1e-5))
                         ndvi = np.where((nir + red) == 0, 0, (nir - red) / (nir + red + 1e-5))
 
@@ -238,7 +232,7 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                         binary_lineaments = ridges > np.percentile(ridges, 93)
                         skeleton = skeletonize(binary_lineaments)
 
-                        # 5. تصدير النتائج متجهة
+                        # استخراج الخطوط
                         lines = []
                         angles = []
                         rows, cols = np.where(skeleton)
@@ -253,10 +247,67 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                             angle = np.degrees(np.arctan2(dx, dy)) % 360
                             angles.append(angle)
 
+                        st.success("✅ تم جلب الحزم واستخراج القواطع بنجاح!")
+
+                        # --- قسم 1: معاينة وتنزيل الحزم الفضائية المجلوبة ---
+                        st.subheader("📡 الحزم الفضائية المجلوبة (Sentinel-2)")
+                        tab1, tab2, tab3, tab4 = st.tabs(["الحزمة B12 (SWIR2)", "الحزمة B11 (SWIR1)", "الحزمة B08 (NIR)", "الحزمة B04 (Red)"])
+                        
+                        with tab1:
+                            fig_b12, ax_b12 = plt.subplots(figsize=(6, 4))
+                            im12 = ax_b12.imshow(swir2, cmap='gray')
+                            plt.colorbar(im12, ax=ax_b12)
+                            st.pyplot(fig_b12)
+                        
+                        with tab2:
+                            fig_b11, ax_b11 = plt.subplots(figsize=(6, 4))
+                            im11 = ax_b11.imshow(swir1, cmap='gray')
+                            plt.colorbar(im11, ax=ax_b11)
+                            st.pyplot(fig_b11)
+
+                        with tab3:
+                            fig_b8, ax_b8 = plt.subplots(figsize=(6, 4))
+                            im8 = ax_b8.imshow(nir, cmap='gray')
+                            plt.colorbar(im8, ax=ax_b8)
+                            st.pyplot(fig_b8)
+
+                        with tab4:
+                            fig_b4, ax_b4 = plt.subplots(figsize=(6, 4))
+                            im4 = ax_b4.imshow(red, cmap='gray')
+                            plt.colorbar(im4, ax=ax_b4)
+                            st.pyplot(fig_b4)
+
+                        # --- قسم 2: خريطة الإسقاط الميداني للتطبيقات والمواقع ---
                         if lines:
                             gdf = gpd.GeoDataFrame(geometry=lines, crs=raster_crs)
-                            gdf = gdf.dissolve()
+                            gdf_wgs84 = gdf.to_crs("EPSG:4326")
 
+                            st.subheader("🗺️ إسقاط القواطع المكتشفة على خريطة المنطقة")
+                            
+                            # تحديد مركز الخريطة
+                            centroid = aoi_gdf.unary_union.centroid
+                            m = folium.Map(location=[centroid.y, centroid.x], zoom_start=13, tiles="OpenStreetMap")
+                            
+                            # إضافة صور القمار الصناعية ESRI Satellite كطبقة أساسية
+                            folium.TileLayer(
+                                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                                attr='Esri',
+                                name='صورة فضائية (Esri Satellite)',
+                                overlay=False,
+                                control=True
+                            ).add_to(m)
+
+                            # رسم القواطع باللون الأحمر على الخريطة
+                            folium.GeoJson(
+                                gdf_wgs84,
+                                name="القواطع النارية المكتشفة",
+                                style_function=lambda x: {'color': 'red', 'weight': 2.5, 'opacity': 0.8}
+                            ).add_to(m)
+
+                            folium.LayerControl().add_to(m)
+                            st_folium(m, width=900, height=500)
+
+                            # ملف التنزيل SHP
                             zip_path = os.path.join(tmpdir, "dykes_auto.zip")
                             shp_dir = os.path.join(tmpdir, "shp")
                             os.makedirs(shp_dir, exist_ok=True)
@@ -267,22 +318,19 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                                     for file in files:
                                         zipf.write(os.path.join(root, file), file)
 
-                            st.success("✅ تم جلب المرئيات وتنسيق الأبعاد واكتشاف القواطع بنجاح!")
-
-                            with open(zip_path, "rb") as fp:
-                                st.download_button(
-                                    label="📥 تحميل Shapefile المكتشف (ZIP)",
-                                    data=fp,
-                                    file_name="extracted_dykes.zip",
-                                    mime="application/zip"
-                                )
+                            st.download_button(
+                                label="📥 تحميل Shapefile المكتشف (ZIP)",
+                                data=open(zip_path, "rb"),
+                                file_name="extracted_dykes.zip",
+                                mime="application/zip"
+                            )
 
                             if angles:
                                 st.subheader("📊 مخطط الوردة الاتجاهي")
                                 radii, edges = np.histogram(angles, bins=36, range=(0, 360))
                                 theta = np.deg2rad(edges[:-1])
                                 
-                                fig = plt.figure(figsize=(6, 6))
+                                fig = plt.figure(figsize=(5, 5))
                                 ax = plt.subplot(111, projection='polar')
                                 ax.set_theta_zero_location('N')
                                 ax.set_theta_direction(-1)
