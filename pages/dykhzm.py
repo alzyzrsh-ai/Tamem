@@ -8,6 +8,7 @@ import numpy as np
 import geopandas as gpd
 import rasterio
 from rasterio.mask import mask
+from rasterio.enums import Resampling
 from shapely.geometry import LineString, Point, Polygon, box
 from sklearn.decomposition import PCA
 from skimage.morphology import skeletonize
@@ -141,7 +142,6 @@ def load_aoi_file(file_bytes, file_name, tmpdir):
 def build_manual_gdf():
     if manual_mode == "نقطة مركزية + نصف قطر (كم)":
         pt = Point(lon_center, lat_center)
-        # تحويل تقريبي للدرجات (1 درجة ≈ 111 كم)
         buffer_deg = buffer_km / 111.0
         poly = pt.buffer(buffer_deg)
         return gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
@@ -159,15 +159,15 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
         with st.spinner("جاري إعداد المنطقة وسحب الحزم الفضائية (Sentinel-2) سحابياً..."):
             with tempfile.TemporaryDirectory() as tmpdir:
                 try:
-                    # 1. تحديد حدود المنطقة (إما من الملف أو يدوي)
+                    # 1. تحديد حدود المنطقة
                     if input_method == "رفع ملف (KML / KMZ / WPT)":
                         aoi_gdf = load_aoi_file(uploaded_aoi.getbuffer(), uploaded_aoi.name, tmpdir).to_crs("EPSG:4326")
                     else:
                         aoi_gdf = build_manual_gdf()
 
-                    bounds = list(aoi_gdf.total_bounds) # [minx, miny, maxx, maxy]
+                    bounds = list(aoi_gdf.total_bounds)
 
-                    # 2. البحث عن مرئيات Sentinel-2 سحابياً عبر STAC
+                    # 2. البحث عن مرئيات Sentinel-2 سحابياً
                     catalog = pystac_client.Client.open(
                         "https://planetarycomputer.microsoft.com/api/stac/v1",
                         modifier=planetary_computer.sign_inplace,
@@ -187,21 +187,39 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                     if not items:
                         st.error("لم يتم العثور على مرئيات فضائية خالية من الغيوم لهذه المنطقة في هذه الفترة.")
                     else:
-                        item = items[0] # اختيار أفضل مرئية
+                        item = items[0]
                         
-                        # 3. فتح الحزم مباشرة عبر روابط الشبكة وقصها
-                        def fetch_band(asset_key):
+                        # 3. دالة جلب الحزم مع توحيد الأبعاد (Resampling)
+                        target_shape = None
+
+                        def fetch_band(asset_key, target_shape=None):
                             href = item.assets[asset_key].href
                             with rasterio.open(href) as src:
                                 aoi_reprojected = aoi_gdf.to_crs(src.crs)
                                 geom = [aoi_reprojected.geometry.iloc[0]] if aoi_reprojected.geometry.iloc[0].geom_type in ['Polygon', 'MultiPolygon'] else [aoi_reprojected.unary_union.convex_hull]
-                                data, out_transform = mask(src, geom, crop=True)
-                                return data[0].astype(np.float32), out_transform, src.crs
+                                
+                                if target_shape is None:
+                                    data, out_transform = mask(src, geom, crop=True)
+                                    return data[0].astype(np.float32), out_transform, src.crs, data[0].shape
+                                else:
+                                    data, out_transform = mask(
+                                        src, 
+                                        geom, 
+                                        crop=True, 
+                                        indexes=1, 
+                                        resampling=Resampling.bilinear
+                                    )
+                                    # إجبار المصفوفة على مطابقة الأبعاد المستهدفة بالضبط
+                                    from scipy.ndimage import zoom
+                                    zoom_factors = (target_shape[0] / data.shape[0], target_shape[1] / data.shape[1])
+                                    data_resized = zoom(data, zoom_factors, order=1)
+                                    return data_resized.astype(np.float32), out_transform, src.crs, target_shape
 
-                        swir2, transform, raster_crs = fetch_band("B12")
-                        swir1, _, _ = fetch_band("B11")
-                        nir, _, _ = fetch_band("B08")
-                        red, _, _ = fetch_band("B04")
+                        # جلب B12 أولاً واعتماد أبعادها كمرجع قياسي
+                        swir2, transform, raster_crs, ref_shape = fetch_band("B12")
+                        swir1, _, _, _ = fetch_band("B11", target_shape=ref_shape)
+                        nir, _, _, _ = fetch_band("B08", target_shape=ref_shape)
+                        red, _, _, _ = fetch_band("B04", target_shape=ref_shape)
 
                         np.seterr(divide='ignore', invalid='ignore')
 
@@ -256,7 +274,7 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                                     for file in files:
                                         zipf.write(os.path.join(root, file), file)
 
-                            st.success("✅ تم جلب المرئيات وتنسيق المنطقة واكتشاف القواطع بنجاح!")
+                            st.success("✅ تم جلب المرئيات وتنسيق الأبعاد واكتشاف القواطع بنجاح!")
 
                             with open(zip_path, "rb") as fp:
                                 st.download_button(
