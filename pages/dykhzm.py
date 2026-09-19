@@ -189,31 +189,24 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                     else:
                         item = items[0]
                         
-                        # 3. دالة جلب الحزم مع توحيد الأبعاد (Resampling)
-                        target_shape = None
-
+                        # 3. دالة جلب الحزم الصحيحة بدون أخطاء المعاملات
                         def fetch_band(asset_key, target_shape=None):
                             href = item.assets[asset_key].href
                             with rasterio.open(href) as src:
                                 aoi_reprojected = aoi_gdf.to_crs(src.crs)
                                 geom = [aoi_reprojected.geometry.iloc[0]] if aoi_reprojected.geometry.iloc[0].geom_type in ['Polygon', 'MultiPolygon'] else [aoi_reprojected.unary_union.convex_hull]
                                 
-                                if target_shape is None:
-                                    data, out_transform = mask(src, geom, crop=True)
-                                    return data[0].astype(np.float32), out_transform, src.crs, data[0].shape
-                                else:
-                                    data, out_transform = mask(
-                                        src, 
-                                        geom, 
-                                        crop=True, 
-                                        indexes=1, 
-                                        resampling=Resampling.bilinear
-                                    )
-                                    # إجبار المصفوفة على مطابقة الأبعاد المستهدفة بالضبط
+                                # قص المرئية أولاً
+                                data, out_transform = mask(src, geom, crop=True)
+                                band_data = data[0].astype(np.float32)
+
+                                # إعادة تشكيل الأبعاد إن طُلِب ذلك
+                                if target_shape is not None and band_data.shape != target_shape:
                                     from scipy.ndimage import zoom
-                                    zoom_factors = (target_shape[0] / data.shape[0], target_shape[1] / data.shape[1])
-                                    data_resized = zoom(data, zoom_factors, order=1)
-                                    return data_resized.astype(np.float32), out_transform, src.crs, target_shape
+                                    zoom_factors = (target_shape[0] / band_data.shape[0], target_shape[1] / band_data.shape[1])
+                                    band_data = zoom(band_data, zoom_factors, order=1)
+
+                                return band_data, out_transform, src.crs, band_data.shape
 
                         # جلب B12 أولاً واعتماد أبعادها كمرجع قياسي
                         swir2, transform, raster_crs, ref_shape = fetch_band("B12")
