@@ -8,7 +8,7 @@ import numpy as np
 import geopandas as gpd
 import rasterio
 from rasterio.mask import mask
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, Point, Polygon, box
 from sklearn.decomposition import PCA
 from skimage.morphology import skeletonize
 from skimage.filters import sobel
@@ -38,23 +38,44 @@ except ImportError:
 st.set_page_config(page_title="منظومة كشف القواطع - التلقائية بالكامل", layout="wide")
 
 st.title("🌋 منظومة كشف القواطع النارية (سحب واستخراج تلقائي)")
-st.info("💡 ارفع ملف المنطقة (AlpineQuest / KML / KMZ / WPT) فقط، وسيتم جلب الحزم الفضائية ومعالجتها سحابياً آلياً.")
+st.info("💡 ارفع ملف المنطقة (AlpineQuest / KML / KMZ / WPT) أو أدخل الإحداثيات يدوياً لجلب الحزم الفضائية ومعالجتها سحابياً.")
 
 # --- القائمة الجانبية ---
-st.sidebar.header("🗺️ 1. رفع ملف المنطقة")
-uploaded_aoi = st.sidebar.file_uploader("ارفع ملف النطاق (AlpineQuest KML / KMZ / WPT)", type=["kml", "kmz", "wpt", "ldk"])
+st.sidebar.header("🗺️ 1. تحديد نطاق الدراسة")
+input_method = st.sidebar.radio("طريقة تحديد المنطقة:", ["رفع ملف (KML / KMZ / WPT)", "إدخال إحداثيات يدوياً"])
+
+uploaded_aoi = None
+manual_mode = None
+lat_center, lon_center, buffer_km = 0.0, 0.0, 5.0
+min_lat, max_lat, min_lon, max_lon = 0.0, 0.0, 0.0, 0.0
+
+if input_method == "رفع ملف (KML / KMZ / WPT)":
+    uploaded_aoi = st.sidebar.file_uploader("ارفع ملف النطاق", type=["kml", "kmz", "wpt", "ldk"])
+else:
+    manual_mode = st.sidebar.selectbox("نوع الإدخال اليدوي:", ["نقطة مركزية + نصف قطر (كم)", "مربع إحاطة (Min/Max)"])
+    if manual_mode == "نقطة مركزية + نصف قطر (كم)":
+        lat_center = st.sidebar.number_input("خط العرض (Latitude):", value=15.3547, format="%.6f")
+        lon_center = st.sidebar.number_input("خط الطول (Longitude):", value=44.2066, format="%.6f")
+        buffer_km = st.sidebar.number_input("نصف القطر (كيلومتر):", value=5.0, min_value=0.5, max_value=50.0)
+    else:
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            min_lat = st.number_input("أدنى عرض (Min Lat):", value=15.3000, format="%.4f")
+            min_lon = st.number_input("أدنى طول (Min Lon):", value=44.1500, format="%.4f")
+        with col2:
+            max_lat = st.number_input("أقصى عرض (Max Lat):", value=15.4000, format="%.4f")
+            max_lon = st.number_input("أقصى طول (Max Lon):", value=44.2500, format="%.4f")
 
 st.sidebar.header("⚙️ 2. خيارات السحب")
 date_range = st.sidebar.date_input("الفترة الزمنية للمرئيات:", [date(2023, 1, 1), date(2026, 1, 1)])
 max_cloud = st.sidebar.slider("أقصى نسبة غيوم مقبول (%):", 0, 20, 10)
 
-# --- دالة شاملة ومحدثة لقراءة كافة صيغ AlpineQuest و KML المعقدة ---
+# --- دالة قراءة ملفات AlpineQuest و KML ---
 def load_aoi_file(file_bytes, file_name, tmpdir):
     file_path = os.path.join(tmpdir, file_name)
     with open(file_path, "wb") as f:
         f.write(file_bytes)
 
-    # 1. تفكيك ملفات KMZ المضغوطة
     if file_name.lower().endswith(".kmz"):
         try:
             with zipfile.ZipFile(file_path, 'r') as zip_ref:
@@ -66,7 +87,6 @@ def load_aoi_file(file_bytes, file_name, tmpdir):
         except Exception:
             pass
 
-    # 2. المحاولة الأولى: القراءة المباشرة عبر GeoPandas
     try:
         return gpd.read_file(file_path, engine="fiona")
     except Exception:
@@ -75,7 +95,6 @@ def load_aoi_file(file_bytes, file_name, tmpdir):
         except Exception:
             pass
 
-    # 3. المحاولة الثانية: تحليل KML / XML عبر ElementTree لوسوم الإحداثيات
     coords = []
     try:
         tree = ET.parse(file_path)
@@ -92,7 +111,6 @@ def load_aoi_file(file_bytes, file_name, tmpdir):
     except Exception:
         pass
 
-    # 4. المحاولة الثالثة: مسح نصي عام لجميع ملفات WPT و KML المعقدة
     if not coords:
         try:
             content = file_bytes.decode('utf-8', errors='ignore')
@@ -109,7 +127,6 @@ def load_aoi_file(file_bytes, file_name, tmpdir):
         except Exception:
             pass
 
-    # 5. بناء الشكل الهندسي وتأمين جلب المرئيات
     if len(coords) >= 3:
         poly = Polygon(coords)
         return gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
@@ -118,20 +135,36 @@ def load_aoi_file(file_bytes, file_name, tmpdir):
         poly = pt.buffer(0.02)
         return gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
     else:
-        raise ValueError("تعذر قراءة الإحداثيات. يرجى إعادة تصدير الملف بصيغة KML أو KMZ قياسية من AlpineQuest.")
+        raise ValueError("تعذر قراءة الملف. يرجى استخدام خيار 'إدخال إحداثيات يدوياً' من القائمة الجانبية.")
+
+# --- بناء GeoDataFrame اليدوي ---
+def build_manual_gdf():
+    if manual_mode == "نقطة مركزية + نصف قطر (كم)":
+        pt = Point(lon_center, lat_center)
+        # تحويل تقريبي للدرجات (1 درجة ≈ 111 كم)
+        buffer_deg = buffer_km / 111.0
+        poly = pt.buffer(buffer_deg)
+        return gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
+    else:
+        poly = box(min_lon, min_lat, max_lon, max_lat)
+        return gpd.GeoDataFrame(geometry=[poly], crs="EPSG:4326")
 
 # --- التنفيذ التلقائي ---
 if st.button("🚀 جلب الحزم تلقائياً واستخراج القواطع"):
-    if not uploaded_aoi:
-        st.error("يرجى رفع ملف نطاق المنطقة من القائمة الجانبية أولاً.")
+    if input_method == "رفع ملف (KML / KMZ / WPT)" and not uploaded_aoi:
+        st.error("يرجى رفع ملف نطاق المنطقة أو التحويل للوضع اليدوي من القائمة الجانبية.")
     elif len(date_range) < 2:
         st.error("يرجى تحديد بداية ونهاية الفترة الزمنية.")
     else:
-        with st.spinner("جاري قراءة الملف وسحب الحزم الفضائية (Sentinel-2) سحابياً..."):
+        with st.spinner("جاري إعداد المنطقة وسحب الحزم الفضائية (Sentinel-2) سحابياً..."):
             with tempfile.TemporaryDirectory() as tmpdir:
                 try:
-                    # 1. قراءة حدود المنطقة
-                    aoi_gdf = load_aoi_file(uploaded_aoi.getbuffer(), uploaded_aoi.name, tmpdir).to_crs("EPSG:4326")
+                    # 1. تحديد حدود المنطقة (إما من الملف أو يدوي)
+                    if input_method == "رفع ملف (KML / KMZ / WPT)":
+                        aoi_gdf = load_aoi_file(uploaded_aoi.getbuffer(), uploaded_aoi.name, tmpdir).to_crs("EPSG:4326")
+                    else:
+                        aoi_gdf = build_manual_gdf()
+
                     bounds = list(aoi_gdf.total_bounds) # [minx, miny, maxx, maxy]
 
                     # 2. البحث عن مرئيات Sentinel-2 سحابياً عبر STAC
@@ -223,7 +256,7 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                                     for file in files:
                                         zipf.write(os.path.join(root, file), file)
 
-                            st.success("✅ تم سحب الحزم سحابياً واكتشاف التراكيب الخطية بنجاح!")
+                            st.success("✅ تم جلب المرئيات وتنسيق المنطقة واكتشاف القواطع بنجاح!")
 
                             with open(zip_path, "rb") as fp:
                                 st.download_button(
