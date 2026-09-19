@@ -1,12 +1,12 @@
 import os
 import zipfile
 import tempfile
+from datetime import date
 import numpy as np
 import geopandas as gpd
 import rasterio
-from rasterio.enums import Resampling
 from rasterio.mask import mask
-from shapely.geometry import LineString, box
+from shapely.geometry import LineString
 from sklearn.decomposition import PCA
 from skimage.morphology import skeletonize
 from skimage.filters import sobel
@@ -43,7 +43,8 @@ st.sidebar.header("🗺️ 1. رفع ملف المنطقة")
 uploaded_aoi = st.sidebar.file_uploader("ارفع ملف النطاق (AlpineQuest KML / KMZ / WPT)", type=["kml", "kmz", "wpt", "ldk"])
 
 st.sidebar.header("⚙️ 2. خيارات السحب")
-date_range = st.sidebar.date_input("الفترة الزمنية للمرئيات:", [np.datetime64('2023-01-01'), np.datetime64('2026-01-01')])
+# استخدام date القياسي لمنع خطأ StreamlitInvalidParameterTypeError
+date_range = st.sidebar.date_input("الفترة الزمنية للمرئيات:", [date(2023, 1, 1), date(2026, 1, 1)])
 max_cloud = st.sidebar.slider("أقصى نسبة غيوم مقبول (%):", 0, 20, 10)
 
 def load_aoi_file(file_bytes, file_name, tmpdir):
@@ -71,6 +72,8 @@ def load_aoi_file(file_bytes, file_name, tmpdir):
 if st.button("🚀 جلب الحزم تلقائياً واستخراج القواطع"):
     if not uploaded_aoi:
         st.error("يرجى رفع ملف نطاق المنطقة من القائمة الجانبية أولاً.")
+    elif len(date_range) < 2:
+        st.error("يرجى تحديد بداية ونهاية الفترة الزمنية.")
     else:
         with st.spinner("جاري قراءة الملف وسحب الحزم الفضائية (Sentinel-2) سحابياً..."):
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -84,10 +87,12 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                     modifier=planetary_computer.sign_inplace,
                 )
 
+                start_date, end_date = date_range[0].strftime("%Y-%m-%d"), date_range[1].strftime("%Y-%m-%d")
+
                 search = catalog.search(
                     collections=["sentinel-2-l2a"],
                     bbox=bounds,
-                    datetime=f"{date_range[0]}/{date_range[1]}",
+                    datetime=f"{start_date}/{end_date}",
                     query={"eo:cloud_cover": {"lt": max_cloud}},
                 )
 
@@ -103,7 +108,6 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
                     def fetch_band(asset_key):
                         href = item.assets[asset_key].href
                         with rasterio.open(href) as src:
-                            # إعادة إسقاط مضلع القص ليتوافق مع مرئية Sentinel
                             aoi_reprojected = aoi_gdf.to_crs(src.crs)
                             geom = [aoi_reprojected.geometry.iloc[0]] if aoi_reprojected.geometry.iloc[0].geom_type in ['Polygon', 'MultiPolygon'] else [aoi_reprojected.unary_union.convex_hull]
                             data, out_transform = mask(src, geom, crop=True)
@@ -116,7 +120,7 @@ if st.button("🚀 جلب الحزم تلقائياً واستخراج القو�
 
                     np.seterr(divide='ignore', invalid='ignore')
 
-                    # 4. المعالجة والتحليل الطيفي (PCA & Lineament Extraction)
+                    # 4. المعالجة والتحليل الطيفي
                     ferrous_index = np.where(swir1 == 0, 0, swir2 / (swir1 + 1e-5))
                     ndvi = np.where((nir + red) == 0, 0, (nir - red) / (nir + red + 1e-5))
 
