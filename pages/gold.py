@@ -1,274 +1,126 @@
-import json
+import streamlit as st
 import ee
 import folium
-import streamlit as st
 from streamlit_folium import st_folium
+import json
 
-# 1. إعداد واجهة الصفحة
+# 1. إعدادات الصفحة
 st.set_page_config(
-    page_title="المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية",
+    page_title="منصة الاستكشاف المعدني والفضائي المتقدمة",
     page_icon="🛰️",
-    layout="wide",
+    layout="wide"
 )
 
-st.title("🛰️ المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية")
-st.markdown(
-    "نظام معالجة سحابي مدمج (Multi-Sensor Satellite Prospectivity Engine) للاستكشاف عن الذهب والمعادن المصاحبة."
-)
-
-# 2. تهيئة وتوثيق Google Earth Engine مع ربط اسم المشروع
-PROJECT_ID = "lively-armor-507414-s8"
-
-
+# 2. تهيئة Earth Engine
 @st.cache_resource
 def init_earth_engine():
     try:
         if "GEE_SERVICE_ACCOUNT" in st.secrets:
-            gee_secret = st.secrets["GEE_SERVICE_ACCOUNT"]
-
-            # معالجة النص في حال وجود رموز خاصة أو أسطر جديدة
-            if isinstance(gee_secret, str):
-                cleaned_secret = gee_secret.replace("\r", "").replace("\t", " ")
-                try:
-                    key_dict = json.loads(cleaned_secret, strict=False)
-                except Exception:
-                    key_dict = json.loads(
-                        cleaned_secret.replace("\n", "\\n"), strict=False
-                    )
-            else:
-                key_dict = dict(gee_secret)
-
-            if "private_key" in key_dict and isinstance(
-                key_dict["private_key"], str
-            ):
-                key_dict["private_key"] = key_dict["private_key"].replace(
-                    "\\n", "\n"
-                )
-
-            project_name = key_dict.get("project_id", PROJECT_ID)
-
+            secrets_dict = dict(st.secrets["GEE_SERVICE_ACCOUNT"])
             credentials = ee.ServiceAccountCredentials(
-                key_dict["client_email"], key_data=json.dumps(key_dict)
+                secrets_dict["client_email"],
+                key_data=json.dumps(secrets_dict)
             )
-            # الربط الصريح بـ Project ID
-            ee.Initialize(credentials, project=project_name)
-            return True, "تم الاتصال بنجاح بخوادم Google Earth Engine!"
+            ee.Initialize(credentials, project="lively-armor-507414-s8")
         else:
-            ee.Initialize(project=PROJECT_ID)
-            return True, "تم الاتصال بالحساب الافتراضي!"
+            ee.Initialize(project="lively-armor-507414-s8")
+        return True
     except Exception as e:
-        return False, f"فشل الاتصال: {str(e)}"
+        st.error(f"فشل الاتصال بـ Google Earth Engine: {e}")
+        return False
 
+ee_initialized = init_earth_engine()
 
-gee_ok, gee_msg = init_earth_engine()
+# 3. واجهة المستخدم
+st.title("المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية 🛰️")
+st.caption("Multi-Sensor Satellite Prospectivity Engine - نظام استكشاف الذهب والتعدن الهيدروحراري")
 
-if not gee_ok:
-    st.error(gee_msg)
-    st.stop()
+st.sidebar.header("⚙️ إعدادات النطاق والتصور")
+lat = st.sidebar.number_input("خط العرض (Latitude)", value=15.3120, format="%.5f")
+lon = st.sidebar.number_input("خط الطول (Longitude)", value=44.1522, format="%.5f")
+zoom = st.sidebar.slider("مستوى التقريب (Zoom)", min_value=6, max_value=16, value=11)
+buffer_km = st.sidebar.slider("نطاق التحليل (كم)", min_value=5, max_value=50, value=15)
+
+st.subheader(f"🗺️ خريطة التحليل الفضائي والطيفي التفاعلية ({lat:.4f}, {lon:.4f})")
+
+# 4. بناء الخريطة والطبقات
+if ee_initialized:
+    try:
+        point = ee.Geometry.Point([lon, lat])
+        roi = point.buffer(buffer_km * 1000)
+
+        m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles="OpenStreetMap")
+
+        def add_ee_layer(ee_image_object, vis_params, name, show=True):
+            map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
+            folium.TileLayer(
+                tiles=map_id_dict['tile_fetcher'].url_format,
+                attr='Google Earth Engine',
+                name=name,
+                overlay=True,
+                control=True,
+                show=show
+            ).add_to(m)
+
+        # أ) ALOS DEM V3_2
+        dem = ee.Image("JAXA/ALOS/AW3D30/V3_2").select('DSM').clip(roi)
+        slope = ee.Terrain.slope(dem)
+        
+        add_ee_layer(dem, {'min': 500, 'max': 3000, 'palette': ['0000ff', '00ffff', 'ffff00', 'ff0000', 'ffffff']}, "النموذج الرقمي للارتفاعات (ALOS DEM V3.2)", show=False)
+        add_ee_layer(slope, {'min': 0, 'max': 45, 'palette': ['white', 'black']}, "مخطط الميول والانكسارات (Slope)", show=False)
+
+        # ب) Sentinel-2 SR
+        s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+              .filterBounds(roi)
+              .filterDate('2023-01-01', '2024-01-01')
+              .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))
+              .median()
+              .clip(roi))
+
+        iron_oxide = s2.select('B4').divide(s2.select('B2'))
+        clay_alteration = s2.select('B11').divide(s2.select('B12'))
+        silica_ferrous = s2.select('B12').divide(s2.select('B8'))
+        gold_composite = s2.select(['B12', 'B11', 'B4'])
+
+        add_ee_layer(gold_composite, {'min': 500, 'max': 4500}, "تركيبة استكشاف الذهب (RGB: SWIR2, SWIR1, Red)", show=True)
+        add_ee_layer(iron_oxide, {'min': 1.1, 'max': 2.3, 'palette': ['blue', 'yellow', 'red']}, "شذوذات أكسيد الحديد (Gossan / Iron Oxide)", show=True)
+        add_ee_layer(clay_alteration, {'min': 1.0, 'max': 2.2, 'palette': ['gray', 'cyan', 'magenta']}, "نطاقات التحول الطيني (Alunite/Kaolinite/Sericite)", show=True)
+        add_ee_layer(silica_ferrous, {'min': 0.5, 'max': 1.8, 'palette': ['black', 'green', 'white']}, "مؤشر السليكا والمعادن الحديدية (Ferrous/Silica)", show=False)
+
+        # ج) Landsat 8/9 Thermal Infrared (TIR)
+        l8_thermal = (ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+                      .filterBounds(roi)
+                      .filterDate('2023-01-01', '2024-01-01')
+                      .filter(ee.Filter.lt('CLOUD_COVER', 10))
+                      .select('ST_B10')
+                      .median()
+                      .multiply(0.00341802).add(149.0)
+                      .sub(273.15)
+                      .clip(roi))
+
+        add_ee_layer(l8_thermal, {'min': 20, 'max': 50, 'palette': ['blue', 'green', 'yellow', 'orange', 'red']}, "الانبعاث الحراري (TIR Band 10 Surface Temp)", show=False)
+
+        # عناصر التحكم والعرض
+        folium.LayerControl(collapsed=False).add_to(m)
+        folium.Marker([lat, lon], popup="مرجع التحليل الحقلي").add_to(m)
+
+        st_folium(m, width="100%", height=550, returned_objects=[])
+
+    except Exception as err:
+        st.error(f"خطأ في معالجة الطبقات الفضائية: {err}")
 else:
-    st.sidebar.success(f"✅ GEE Connected ({PROJECT_ID})")
+    st.warning("بانتظار تهيئة Google Earth Engine...")
 
-# 3. لوحة المدخلات الجانبية لتحديد أي منطقة في العالم
-st.sidebar.header("🎯 إعدادات منطقة الاستكشاف")
-
-default_lat = 15.3120
-default_lon = 44.1522
-
-target_lat = st.sidebar.number_input(
-    "خط العرض (Latitude):", value=default_lat, format="%.6f"
-)
-target_lon = st.sidebar.number_input(
-    "خط الطول (Longitude):", value=default_lon, format="%.6f"
-)
-buffer_km = st.sidebar.slider(
-    "نصف قطر نطاق الدراسة (كيلومتر):",
-    min_value=1.0,
-    max_value=20.0,
-    value=3.0,
-    step=0.5,
-)
-
-# تحديد النطاق الجغرافي (AOI)
-point = ee.Geometry.Point([target_lon, target_lat])
-aoi = point.buffer(buffer_km * 1000)
-
-st.sidebar.markdown("---")
-st.sidebar.header("🎛️️ طبقات التحليل المتاحة")
-show_sentinel_rgb = st.sidebar.checkbox(
-    "صورة ألوان طبيعية Sentinel-2 RGB", value=True
-)
-show_iron = st.sidebar.checkbox(
-    "نطاقات أكسيد الحديد (Iron Oxide Ratio)", value=True
-)
-show_clay = st.sidebar.checkbox(
-    "التحول الطيني (Hydroxyl / Clay Alteration)", value=True
-)
-show_silica = st.sidebar.checkbox(
-    "مؤشر السليكا والكوارتز (Landsat 8 SWIR)", value=True
-)
-show_thermal = st.sidebar.checkbox(
-    "الانبعاثات الحرارية (Landsat TIR LST)", value=False
-)
-show_sar = st.sidebar.checkbox(
-    "اختراق الرادار التكتوني (Sentinel-1 SAR)", value=False
-)
-show_slope = st.sidebar.checkbox(
-    "انحدار المجرى والمصايد (ALOS DEM Slope)", value=True
-)
-
-# 4. خوارزميات معالجة الصور الفضائية
-
-# أ) Sentinel-2 (الأكسيد والطين والألوان الطبيعية)
-s2 = (
-    ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-    .filterBounds(aoi)
-    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 15))
-    .sort("CLOUD_COVER")
-    .first()
-    .clip(aoi)
-)
-
-iron_ratio = s2.select("B4").divide(s2.select("B2")).rename("Iron_Oxide")
-clay_ratio = s2.select("B11").divide(s2.select("B12")).rename("Clay_Alteration")
-
-# ب) Landsat 8 (السليكا والحراري)
-l8 = (
-    ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
-    .filterBounds(aoi)
-    .sort("CLOUD_COVER")
-    .first()
-    .clip(aoi)
-)
-
-silica_index = (
-    l8.select("SR_B6").divide(l8.select("SR_B7")).rename("Silica_Index")
-)
-thermal_band = (
-    l8.select("ST_B10").multiply(0.00341802).add(149.0).rename("Thermal")
-)
-
-# ج) Sentinel-1 (الرادار التكتوني)
-s1 = (
-    ee.ImageCollection("COPERNICUS/S1_GRD")
-    .filterBounds(aoi)
-    .filter(ee.Filter.eq("instrumentMode", "IW"))
-    .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
-    .first()
-    .clip(aoi)
-)
-sar_vv = s1.select("VV")
-
-# د) نموذج الارتفاعات الرقمية ALOS DEM الانحدار والمصايد
-dem = ee.Image("JAXA/ALOS/AW3D30/V1_1").select("AVE").clip(aoi)
-slope = ee.Terrain.slope(dem).rename("Slope")
-
-# 5. إعداد الخريطة التفاعلية Folium
-m = folium.Map(location=[target_lat, target_lon], zoom_start=14, tiles=None)
-
-folium.TileLayer(
-    tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    attr="Esri World Imagery",
-    name="صورة فضائية عالية الدقة (Esri)",
-    overlay=False,
-    control=True,
-).add_to(m)
-
-
-def add_ee_layer(ee_image_object, vis_params, name):
-  map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
-  folium.TileLayer(
-      tiles=map_id_dict["tile_fetcher"].url_format,
-      attr="Google Earth Engine",
-      name=name,
-      overlay=True,
-      control=True,
-  ).add_to(m)
-
-
-if show_sentinel_rgb:
-  add_ee_layer(
-      s2,
-      {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000},
-      "Sentinel-2 ألوان طبيعية",
-  )
-
-if show_iron:
-  add_ee_layer(
-      iron_ratio,
-      {"min": 1.1, "max": 2.2, "palette": ["blue", "yellow", "orange", "red"]},
-      "🔥 أكسيد الحديد (Iron Oxide)",
-  )
-
-if show_clay:
-  add_ee_layer(
-      clay_ratio,
-      {"min": 1.0, "max": 2.0, "palette": ["black", "cyan", "green", "magenta"]},
-      "🧪 التحول الطيني (Hydroxyl/Clay)",
-  )
-
-if show_silica:
-  add_ee_layer(
-      silica_index,
-      {"min": 0.8, "max": 1.8, "palette": ["brown", "white", "purple"]},
-      "💎 مؤشر السليكا والكوارتز",
-  )
-
-if show_thermal:
-  add_ee_layer(
-      thermal_band,
-      {"min": 280, "max": 320, "palette": ["blue", "green", "red"]},
-      "🌡️ الانبعاثات الحرارية LST",
-  )
-
-if show_sar:
-  add_ee_layer(
-      sar_vv,
-      {"min": -25, "max": 0, "palette": ["black", "gray", "white"]},
-      "📡 اختراق الرادار (Sentinel-1 SAR)",
-  )
-
-if show_slope:
-  add_ee_layer(
-      slope,
-      {"min": 0, "max": 45, "palette": ["green", "yellow", "orange", "red"]},
-      "⛰️ انحدار المجرى والمصايد (Slope)",
-  )
-
-folium.Marker(
-    location=[target_lat, target_lon],
-    popup=f"نقطة الاستكشاف المركزية\nLat: {target_lat}, Lon: {target_lon}",
-    icon=folium.Icon(color="red", icon="star"),
-).add_to(m)
-
-folium.LayerControl(collapsed=False).add_to(m)
-
-# 6. عرض الخريطة والدليل الاستكشافي
-st.write(
-    f"### 🗺️ خريطة التحليل الفضائي التفاعلية لـ ({target_lat}, {target_lon})"
-)
-st_folium(m, width=1200, height=650)
-
+# 5. الدليل الجيوفيزيائي والطيفي
 st.markdown("---")
-st.write("### 📖 دليل التفسير الجيوفيزيائي للمصايد والشذوذات:")
-col1, col2, col3 = st.columns(3)
+st.subheader("📖 دليل التفسير الجيوفيزيائي والأدلة الطيفية للذهب:")
+
+col1, col2 = st.columns(2)
 
 with col1:
-  st.info(
-      "**🔥 أكسيد الحديد والطين:**\nاللون الأحمر في أكسيد الحديد والوردي/الماجنتا"
-      " في الطين يدل على نطاقات تجوية كبريتيدات الحديد والتطفر الهيدروحراري"
-      " (Gossan / Alteration Zones)."
-  )
+    st.info("🔥 **أكسيد الحديد والقبعات الحديدية (Gossan):**\nاللون الأحمر والبرتقالي يمثل نطاقات تجوية كبريتيدات الحديد (Pyrite/Chalcopyrite) التي تعلو التمعدنات الذهبية عادة.")
+    st.success("💎 **نطاقات التحول الطيني الهيدروحراري (SWIR Alteration):**\nاللون الماجنتا والوردي يوضح تواجد معادن السيريسيت والكاولينيت والألونيت الناتجة عن المحاليل المائية الحارة.")
 
 with col2:
-  st.success(
-      "**💎 السليكا والانبعاث الحراري:**\nاللون الأرجواني/الأبيض في السليكا يوضح"
-      " عروق الكوارتز والمناطق الغنية بالسليكا التي غالباً ما تحتضن تمعدنات"
-      " الذهب العرقي."
-  )
-
-with col3:
-  st.warning(
-      "**⛰️ انحدار المجرى والمصايد:**\nتغير الانحدار من الأحمر إلى الأخضر/الأصفر"
-      " يمثل نقاط انكسار المجرى (Slope Break)، وهي المصايد الرسوبية المثالية"
-      " لتجمع الذهب الودي."
-  )
+    st.warning("⚡ **تركيبة الذهب الطيفية (SWIR2 / SWIR1 / Red):**\nتظهر المظاهر الصخرية الحاوية لعروق الكوارتز باللون الأبيض الضارب إلى الأصفر في التركيبة الثلاثية.")
+    st.error("🌡️ **الانبعاث الحراري (Thermal TIR B10):**\nيساعد الفارق الحراري في تمييز الامتدادات البنيوية وعروق الكوارتز الضخمة والمجاري الهيدرولوجية القديمة.")
