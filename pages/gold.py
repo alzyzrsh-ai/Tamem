@@ -7,7 +7,7 @@ import json
 # 1. إعدادات الصفحة
 st.set_page_config(
     page_title="منصة الاستكشاف المعدني والفضائي المتقدمة",
-    page_icon="🛰️️",
+    page_icon="🛰️",
     layout="wide"
 )
 
@@ -47,7 +47,7 @@ def init_earth_engine():
 ee_initialized = init_earth_engine()
 
 # 3. واجهة المستخدم
-st.title("المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية 🛰️")
+st.title("المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية 🛰️️")
 st.caption("Multi-Sensor Satellite Prospectivity Engine - نظام استكشاف الذهب والتعدن الهيدروحراري")
 
 st.sidebar.header("⚙️ إعدادات النطاق والتصور")
@@ -77,7 +77,7 @@ if ee_initialized:
                 show=show
             ).add_to(m)
 
-        # أ) ALOS DEM V3_2 - (استدعاء كـ ImageCollection ثم دمج Mosaic)
+        # أ) ALOS DEM V3_2
         dem = ee.ImageCollection("JAXA/ALOS/AW3D30/V3_2").select('DSM').mosaic().clip(roi)
         slope = ee.Terrain.slope(dem)
         
@@ -102,7 +102,7 @@ if ee_initialized:
         add_ee_layer(clay_alteration, {'min': 1.0, 'max': 2.2, 'palette': ['gray', 'cyan', 'magenta']}, "نطاقات التحول الطيني (Alunite/Kaolinite/Sericite)", show=True)
         add_ee_layer(silica_ferrous, {'min': 0.5, 'max': 1.8, 'palette': ['black', 'green', 'white']}, "مؤشر السليكا والمعادن الحديدية (Ferrous/Silica)", show=False)
 
-        # ج) Landsat 8/9 Thermal Infrared (TIR)
+        # ج) Landsat 8/9 Thermal Infrared (TIR) - تصحيح .subtract(273.15)
         l8_thermal = (ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
                       .filterBounds(roi)
                       .filterDate('2023-01-01', '2024-01-01')
@@ -110,7 +110,7 @@ if ee_initialized:
                       .select('ST_B10')
                       .median()
                       .multiply(0.00341802).add(149.0)
-                      .sub(273.15)
+                      .subtract(273.15)
                       .clip(roi))
 
         add_ee_layer(l8_thermal, {'min': 20, 'max': 50, 'palette': ['blue', 'green', 'yellow', 'orange', 'red']}, "الانبعاث الحراري (TIR Band 10 Surface Temp)", show=False)
