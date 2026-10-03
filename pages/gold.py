@@ -11,19 +11,29 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. تهيئة Earth Engine
+# 2. تهيئة Earth Engine مع معالجة مرنة للـ Secrets
 @st.cache_resource
 def init_earth_engine():
     try:
+        project_id = "lively-armor-507414-s8"
+        
         if "GEE_SERVICE_ACCOUNT" in st.secrets:
-            secrets_dict = dict(st.secrets["GEE_SERVICE_ACCOUNT"])
+            secrets_data = st.secrets["GEE_SERVICE_ACCOUNT"]
+            
+            # إذا كان النص خام داخل TOML/Secrets
+            if isinstance(secrets_data, str):
+                secrets_dict = json.loads(secrets_data)
+            else:
+                secrets_dict = dict(secrets_data)
+                
             credentials = ee.ServiceAccountCredentials(
                 secrets_dict["client_email"],
                 key_data=json.dumps(secrets_dict)
             )
-            ee.Initialize(credentials, project="lively-armor-507414-s8")
+            ee.Initialize(credentials, project=project_id)
         else:
-            ee.Initialize(project="lively-armor-507414-s8")
+            ee.Initialize(project=project_id)
+            
         return True
     except Exception as e:
         st.error(f"فشل الاتصال بـ Google Earth Engine: {e}")
