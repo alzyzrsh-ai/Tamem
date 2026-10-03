@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. تهيئة Earth Engine مع معالجة مفاتيح Secrets
+# 2. تهيئة Earth Engine مع معالجة آمنة ومباشرة للـ Secrets
 @st.cache_resource
 def init_earth_engine():
     try:
@@ -46,8 +46,8 @@ def init_earth_engine():
 
 ee_initialized = init_earth_engine()
 
-# 3. واجهة المستخدم
-st.title("المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية 🛰️️")
+# 3. واجهة المستخدم والشريط الجانبي
+st.title("المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية 🛰️")
 st.caption("Multi-Sensor Satellite Prospectivity Engine - نظام استكشاف الذهب والتعدن الهيدروحراري")
 
 st.sidebar.header("⚙️ إعدادات النطاق والتصور")
@@ -64,6 +64,7 @@ if ee_initialized:
         point = ee.Geometry.Point([lon, lat])
         roi = point.buffer(buffer_km * 1000)
 
+        # إنشاء خريطة Folium الأساسية
         m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles="OpenStreetMap")
 
         def add_ee_layer(ee_image_object, vis_params, name, show=True):
@@ -77,14 +78,14 @@ if ee_initialized:
                 show=show
             ).add_to(m)
 
-        # أ) ALOS DEM V3_2
+        # أ) ALOS DEM V3_2 - النموذج الرقمي للارتفاعات والميول
         dem = ee.ImageCollection("JAXA/ALOS/AW3D30/V3_2").select('DSM').mosaic().clip(roi)
         slope = ee.Terrain.slope(dem)
         
         add_ee_layer(dem, {'min': 500, 'max': 3000, 'palette': ['0000ff', '00ffff', 'ffff00', 'ff0000', 'ffffff']}, "النموذج الرقمي للارتفاعات (ALOS DEM V3.2)", show=False)
         add_ee_layer(slope, {'min': 0, 'max': 45, 'palette': ['white', 'black']}, "مخطط الميول والانكسارات (Slope)", show=False)
 
-        # ب) Sentinel-2 SR
+        # ب) Sentinel-2 SR - مؤشرات استكشاف الذهب
         s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
               .filterBounds(roi)
               .filterDate('2023-01-01', '2024-01-01')
@@ -102,7 +103,7 @@ if ee_initialized:
         add_ee_layer(clay_alteration, {'min': 1.0, 'max': 2.2, 'palette': ['gray', 'cyan', 'magenta']}, "نطاقات التحول الطيني (Alunite/Kaolinite/Sericite)", show=True)
         add_ee_layer(silica_ferrous, {'min': 0.5, 'max': 1.8, 'palette': ['black', 'green', 'white']}, "مؤشر السليكا والمعادن الحديدية (Ferrous/Silica)", show=False)
 
-        # ج) Landsat 8/9 Thermal Infrared (TIR) - تصحيح .subtract(273.15)
+        # ج) Landsat 8/9 Thermal Infrared (TIR) - الانبعاث الحراري
         l8_thermal = (ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
                       .filterBounds(roi)
                       .filterDate('2023-01-01', '2024-01-01')
@@ -115,11 +116,12 @@ if ee_initialized:
 
         add_ee_layer(l8_thermal, {'min': 20, 'max': 50, 'palette': ['blue', 'green', 'yellow', 'orange', 'red']}, "الانبعاث الحراري (TIR Band 10 Surface Temp)", show=False)
 
-        # عناصر التحكم والعرض
+        # أدوات التحكم وعلامة الموقع
         folium.LayerControl(collapsed=False).add_to(m)
         folium.Marker([lat, lon], popup="مرجع التحليل الحقلي").add_to(m)
 
-        st_folium(m, width="100%", height=550, returned_objects=[])
+        # التعديل الجوهري: تحديد أبعاد صريحة بكسلية يضمن ظهور الخريطة فوراً على الجوال
+        st_folium(m, height=500, use_container_width=True, returned_objects=[])
 
     except Exception as err:
         st.error(f"خطأ في معالجة الطبقات الفضائية: {err}")
