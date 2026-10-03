@@ -11,21 +11,28 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. تهيئة Earth Engine مع معالجة مرنة للـ Secrets
+# 2. تهيئة Earth Engine مع تنظيف آمن لمفاتيح Secrets
 @st.cache_resource
 def init_earth_engine():
     try:
         project_id = "lively-armor-507414-s8"
         
         if "GEE_SERVICE_ACCOUNT" in st.secrets:
-            secrets_data = st.secrets["GEE_SERVICE_ACCOUNT"]
-            
-            # إذا كان النص خام داخل TOML/Secrets
-            if isinstance(secrets_data, str):
-                secrets_dict = json.loads(secrets_data)
+            # تحويل البيانات إلى قاموس مرن
+            sec = st.secrets["GEE_SERVICE_ACCOUNT"]
+            if hasattr(sec, "to_dict"):
+                secrets_dict = sec.to_dict()
+            elif isinstance(sec, str):
+                secrets_dict = json.loads(sec, strict=False)
             else:
-                secrets_dict = dict(secrets_data)
-                
+                secrets_dict = dict(sec)
+
+            # معالجة وتنظيف أحرف السطور الجديدة المكسورة في المفتاح الخاص
+            if "private_key" in secrets_dict:
+                pk = secrets_dict["private_key"]
+                if isinstance(pk, str):
+                    secrets_dict["private_key"] = pk.replace("\\n", "\n")
+
             credentials = ee.ServiceAccountCredentials(
                 secrets_dict["client_email"],
                 key_data=json.dumps(secrets_dict)
