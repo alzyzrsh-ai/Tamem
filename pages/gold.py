@@ -7,18 +7,17 @@ import json
 # 1. إعدادات الصفحة
 st.set_page_config(
     page_title="منصة الاستكشاف المعدني والفضائي المتقدمة",
-    page_icon="🛰️",
+    page_icon="🛰️️",
     layout="wide"
 )
 
-# 2. تهيئة Earth Engine مع تنظيف آمن لمفاتيح Secrets
+# 2. تهيئة Earth Engine مع معالجة مفاتيح Secrets
 @st.cache_resource
 def init_earth_engine():
     try:
         project_id = "lively-armor-507414-s8"
         
         if "GEE_SERVICE_ACCOUNT" in st.secrets:
-            # تحويل البيانات إلى قاموس مرن
             sec = st.secrets["GEE_SERVICE_ACCOUNT"]
             if hasattr(sec, "to_dict"):
                 secrets_dict = sec.to_dict()
@@ -27,7 +26,6 @@ def init_earth_engine():
             else:
                 secrets_dict = dict(sec)
 
-            # معالجة وتنظيف أحرف السطور الجديدة المكسورة في المفتاح الخاص
             if "private_key" in secrets_dict:
                 pk = secrets_dict["private_key"]
                 if isinstance(pk, str):
@@ -79,8 +77,8 @@ if ee_initialized:
                 show=show
             ).add_to(m)
 
-        # أ) ALOS DEM V3_2
-        dem = ee.Image("JAXA/ALOS/AW3D30/V3_2").select('DSM').clip(roi)
+        # أ) ALOS DEM V3_2 - (استدعاء كـ ImageCollection ثم دمج Mosaic)
+        dem = ee.ImageCollection("JAXA/ALOS/AW3D30/V3_2").select('DSM').mosaic().clip(roi)
         slope = ee.Terrain.slope(dem)
         
         add_ee_layer(dem, {'min': 500, 'max': 3000, 'palette': ['0000ff', '00ffff', 'ffff00', 'ff0000', 'ffffff']}, "النموذج الرقمي للارتفاعات (ALOS DEM V3.2)", show=False)
