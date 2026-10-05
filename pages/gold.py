@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# 2. تهيئة Earth Engine مع معالجة آمنة ومباشرة للـ Secrets
+# 2. تهيئة Earth Engine مع معالجة مفاتيح Secrets
 @st.cache_resource
 def init_earth_engine():
     try:
@@ -120,7 +120,7 @@ if ee_initialized:
         folium.LayerControl(collapsed=False).add_to(m)
         folium.Marker([lat, lon], popup="مرجع التحليل الحقلي").add_to(m)
 
-        # التعديل الجوهري: تحديد أبعاد صريحة بكسلية يضمن ظهور الخريطة فوراً على الجوال
+        # رندر خفيف وسريع ومباشر
         st_folium(m, height=500, use_container_width=True, returned_objects=[])
 
     except Exception as err:
