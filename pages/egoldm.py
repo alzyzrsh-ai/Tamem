@@ -1,7 +1,6 @@
 import json
 import ee
 import streamlit as st
-import numpy as np
 
 # 1. إعداد واجهة الصفحة
 st.set_page_config(
@@ -11,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("🛰️ المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية")
-st.markdown("نظام معالجة سحابي متكامل للاستكشاف المعدني، عروق المرو، والمياه الجوفية مع نافذة المعالجة ورسم خطوط الهدف.")
+st.markdown("نظام معالجة سحابي حقيقي لاستخراج البيانات الجيوفيزيائية وتحليل القيم الفعلية.")
 
 # 2. تهيئة وتوثيق Google Earth Engine
 PROJECT_ID = "lively-armor-507414-s8"
@@ -65,22 +64,21 @@ aoi = point.buffer(buffer_km * 1000)
 region = aoi.bounds().getInfo()["coordinates"]
 
 st.sidebar.markdown("---")
-st.sidebar.header("🎛 طبقات المعالجة الشاملة (Scale & IR)")
+st.sidebar.header("🎛 خيارات المعالجة")
 show_sentinel_rgb = st.sidebar.checkbox("صورة ألوان طبيعية Sentinel-2 RGB", value=True)
 show_iron = st.sidebar.checkbox("نطاق أكسيد الحديد (Iron Oxide)", value=True)
-show_clay = st.sidebar.checkbox("التحول الطيني وتحت الحمراء (Clay/SWIR)", value=True)
+show_clay = st.sidebar.checkbox("التحول الطيني (Clay/SWIR)", value=True)
 show_silica = st.sidebar.checkbox("مؤشر السليكا والكوارتز (Landsat SWIR)", value=True)
-show_thermal = st.sidebar.checkbox("الانبعاث الحراري (Landsat TIR LST)", value=True)
-show_sar = st.sidebar.checkbox("اختراق الرادار التكتوني (Sentinel-1 SAR)", value=False)
-show_slope = st.sidebar.checkbox("انحدار المجرى والمصايد (DEM Slope)", value=True)
+show_thermal = st.sidebar.checkbox("الانبعاث الحراري (Thermal LST)", value=True)
+show_slope = st.sidebar.checkbox("انحدار المجرى (DEM Slope)", value=True)
 
 # تبويبات التطبيق الرئيسية
-tab1, tab2 = st.tabs(["🛰️ العرض والتحميل الفضائي", "📊 نافذة معالجة البيانات وتقدير العمق والهدف"])
+tab1, tab2 = st.tabs(["🛰️ العرض والتحميل الفضائي", "📊 نافذة معالجة البيانات الفعلية (Real GEE Analytics)"])
 
 with tab1:
-    st.write(f"### 🛰️ نتائج التحليل الفضائي الشامل (Lat: {target_lat}, Lon: {target_lon})")
+    st.write(f"### 🛰️ الصور الفضائية ومقياس الدقة المكانية (Lat: {target_lat}, Lon: {target_lon})")
 
-    def display_and_download_ee_image(image_obj, vis_params, title_text, file_prefix):
+    def display_and_download_ee_image(image_obj, vis_params, title_text, file_prefix, scale_res):
         try:
             with st.spinner(f"جاري معالجة وتجهيز: {title_text}..."):
                 thumb_url = image_obj.getThumbURL({
@@ -92,10 +90,13 @@ with tab1:
                 st.subheader(title_text)
                 st.image(thumb_url, use_container_width=True)
                 
+                # عرض المقياس ودليل الألوان بوضوح تحت كل صورة
+                st.caption(f"📐 **المقياس والدقة المكانية (Spatial Scale):** {scale_res} | 🎨 **نطاق القيم (Min/Max):** {vis_params.get('min')} إلى {vis_params.get('max')}")
+                
                 download_url = image_obj.getDownloadURL({
                     "name": file_prefix,
                     "region": aoi,
-                    "scale": 10,
+                    "scale": int(scale_res.replace(" متر", "").replace("متر", "")),
                     "format": "GEO_TIFF"
                 })
                 st.markdown(f"📥 [تحميل الطبقة بصيغة GeoTIFF للـ GIS]({download_url})")
@@ -105,56 +106,93 @@ with tab1:
 
     if show_sentinel_rgb:
         s2 = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
-        display_and_download_ee_image(s2.select(["B4", "B3", "B2"]), {"min": 0, "max": 3000}, "📷 صورة ألوان طبيعية Sentinel-2 RGB", "Sentinel_RGB")
+        display_and_download_ee_image(s2.select(["B4", "B3", "B2"]), {"min": 0, "max": 3000}, "📷 صورة ألوان طبيعية Sentinel-2 RGB", "Sentinel_RGB", "10 متر")
 
     if show_iron:
         s2_iron = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
         iron_ratio = s2_iron.select("B4").divide(s2_iron.select("B2")).rename("Iron_Oxide")
-        display_and_download_ee_image(iron_ratio, {"min": 1.1, "max": 2.2, "palette": ["blue", "yellow", "orange", "red"]}, "🔥 نطاق أكسيد الحديد (Iron Oxide)", "Iron_Oxide")
+        display_and_download_ee_image(iron_ratio, {"min": 1.1, "max": 2.2, "palette": ["blue", "yellow", "orange", "red"]}, "🔥 نطاق أكسيد الحديد (Iron Oxide)", "Iron_Oxide", "10 متر")
 
     if show_clay:
         s2_clay = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
         clay_ratio = s2_clay.select("B11").divide(s2_clay.select("B12")).rename("Clay_Alteration")
-        display_and_download_ee_image(clay_ratio, {"min": 1.0, "max": 2.0, "palette": ["black", "cyan", "green", "magenta"]}, "🧪 التحول الطيني وتحت الحمراء (SWIR B11/B12)", "Clay_SWIR")
+        display_and_download_ee_image(clay_ratio, {"min": 1.0, "max": 2.0, "palette": ["black", "cyan", "green", "magenta"]}, "🧪 التحول الطيني (SWIR B11/B12)", "Clay_SWIR", "20 متر")
 
     if show_silica:
         l8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
         silica_index = l8.select("SR_B6").divide(l8.select("SR_B7")).rename("Silica_Index")
-        display_and_download_ee_image(silica_index, {"min": 0.8, "max": 1.8, "palette": ["brown", "white", "purple"]}, "💎 مؤشر السليكا والكوارتز (Landsat SWIR)", "Silica_Index")
+        display_and_download_ee_image(silica_index, {"min": 0.8, "max": 1.8, "palette": ["brown", "white", "purple"]}, "💎 مؤشر السليكا والكوارتز (Landsat SWIR)", "Silica_Index", "30 متر")
 
     if show_thermal:
         l8_thermal = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
         thermal_band = l8_thermal.select("ST_B10").multiply(0.00341802).add(149.0).rename("Thermal")
-        display_and_download_ee_image(thermal_band, {"min": 280, "max": 320, "palette": ["blue", "green", "red"]}, "🌡️ الانبعاث الحراري (Thermal LST)", "Thermal_LST")
+        display_and_download_ee_image(thermal_band, {"min": 280, "max": 320, "palette": ["blue", "green", "red"]}, "🌡️ الانبعاث الحراري (Thermal LST)", "Thermal_LST", "30 متر")
 
     if show_slope:
         dem = ee.Image("JAXA/ALOS/AW3D30/V1_1").select("AVE").clip(aoi)
         slope = ee.Terrain.slope(dem).rename("Slope")
-        display_and_download_ee_image(slope, {"min": 0, "max": 45, "palette": ["green", "yellow", "orange", "red"]}, "⛰️ انحدار المجرى والمصايد (DEM Slope)", "DEM_Slope")
+        display_and_download_ee_image(slope, {"min": 0, "max": 45, "palette": ["green", "yellow", "orange", "red"]}, "⛰️ انحدار المجرى (DEM Slope)", "DEM_Slope", "30 متر")
 
 with tab2:
-    st.write("### 📊 نافذة معالجة البيانات وتقدير العمق واستخراج خطوط الهدف")
-    st.markdown("هذه النافذة مخصصة لتحليل الشذوذات الناتجة وتقدير عمق التراكيب أو خطوط الضعف (Lineaments) المرتبطة بعروق المرو أو تجمعات المياه.")
+    st.write("### 📊 نافذة المعالجة الحقيقية واستخراج الإحصائيات المكانية (Real GEE Computation)")
+    st.markdown("هذه النافذة تقوم بحساب **القيم الإحصائية الفعلية** (متوسط المؤشر، القيم العظمى والصغرى) مباشرة من خوادم Google Earth Engine بناءً على النطاق المحدد.")
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        anomaly_threshold = st.slider("عتبة فصل الشذوذ الحراري/الطيني:", 1.0, 3.0, 1.5, 0.1)
-        target_type = st.selectbox("نوع الهدف الاستكشافي:", ["عروق المرو والكوارتز (معادن)", "حوض مياه جوفية (هيدرولوجيا)", "تصدعات وكسور تكتونية (Lineaments)"])
+    selected_index_type = st.selectbox("اختر المؤشر لحساب إحصائياته الحقيقية:", [
+        "نطاق أكسيد الحديد (Iron Oxide)",
+        "التحول الطيني (Clay Alteration)",
+        "مؤشر السليكا (Silica Index)",
+        "الانحدار الطبوغرافي (DEM Slope)"
+    ])
 
-    with col_b:
-        estimated_depth_method = st.selectbox("نموذج تقدير العمق التقريبي:", ["تحليل تدرج الشذوذ الطيفي (Spectral Gradient)", "تقدير عمق النطاق الهيدروحراري (Half-Slope Method)", "النمذجة الجيوفيزيائية التقديرية (1D/3D Euler Proxy)"])
-        run_processing = st.button("🚀 تنفيذ التحليل واستخراج الأهداف والعمق")
+    if st.button("🔄 تنفيذ الاستعلام الحقيقي من السحابة"):
+        with st.spinner("جاري حساب القيم الفعلية من خوادم GEE..."):
+            try:
+                # تجهيز الصور للمعالجة الحقيقية
+                s2_calc = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
+                l8_calc = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
+                dem_calc = ee.Image("JAXA/ALOS/AW3D30/V1_1").select("AVE").clip(aoi)
 
-    if run_processing:
-        with st.spinner("جاري حساب معلمات الهدف والعمق التقريبي..."):
-            st.success("✅ تم الانتهاء من المعالجة وتحليل خطوط الهدف بنجاح!")
-            st.markdown("---")
-            st.metric(label="📍 إحداثيات مركز الهدف المستنتج", value=f"Lat: {target_lat}, Lon: {target_lon}")
-            st.metric(label="📐 نصف القطر المؤثر لنطاق الشذوذ", value=f"{buffer_km} كم")
-            
-            if "عروق المرو" in target_type:
-                st.info("💎 **تحليل عروق المرو:** يُظهر التباين الطيني والحراري وجود امتداد هيكلي محتمل يتوافق مع نطاقات السليكا البيضاء. يُنصح بعمل جسات مقاومة كهربائية (2D ERT) عبر هذا الخط لتقييم السمك والعمق بدقة.")
-            elif "مياه جوفية" in target_type:
-                st.info("💧 **تحليل الهيدرولوجيا:** يُظهر تقاطع خطوط التصريف مع الانكسارات محتملات عالية لتجمع المياه. العمق التقديري لمنطقة التغذية يتراوح مبدئياً بين 150 إلى 400 متر حسب معطيات الانحدار.")
-            else:
-                st.info("⚡ **تحليل التصدعات:** تم رصد امتداد خطي تكتوني (Lineament). يُرجى سحب بيانات الـ GeoTIFF وتطبيق الفلترة الاتجاهية في برنامج الـ GIS.")
+                if "أكسيد الحديد" in selected_index_type:
+                    img_calc = s2_calc.select("B4").divide(s2_calc.select("B2")).rename("val")
+                    scale_val = 10
+                elif "التحول الطيني" in selected_index_type:
+                    img_calc = s2_calc.select("B11").divide(s2_calc.select("B12")).rename("val")
+                    scale_val = 20
+                elif "السليكا" in selected_index_type:
+                    img_calc = l8_calc.select("SR_B6").divide(l8_calc.select("SR_B7")).rename("val")
+                    scale_val = 30
+                else:
+                    img_calc = ee.Terrain.slope(dem_calc).rename("val")
+                    scale_val = 30
+
+                # حساب الإحصائيات الحقيقية باستخدام reduceRegion
+                stats = img_calc.reduceRegion(
+                    reducer=ee.Reducer.mean().combine(
+                        reducer2=ee.Reducer.max(), sharedInputs=True
+                    ).combine(
+                        reducer2=ee.Reducer.min(), sharedInputs=True
+                    ),
+                    geometry=aoi,
+                    scale=scale_val,
+                    maxPixels=1e9
+                ).getInfo()
+
+                st.success("✅ تمت عملية المعالجة واستخراج النتائج الحقيقية بنجاح!")
+                
+                stat_values = list(stats.values()) if stats else []
+                mean_val = stat_values[0] if len(stat_values) > 0 and stat_values[0] is not None else 0
+                max_val = stat_values[1] if len(stat_values) > 1 and stat_values[1] is not None else 0
+                min_val = stat_values[2] if len(stat_values) > 2 and stat_values[2] is not None else 0
+
+                col_res1, col_res2, col_res3 = st.columns(3)
+                with col_res1:
+                    st.metric(label="📈 المتوسط الحقيقي (Mean)", value=f"{mean_val:.4f}")
+                with col_res2:
+                    st.metric(label="🔼 القيمة العظمى (Max)", value=f"{max_val:.4f}")
+                with col_res3:
+                    st.metric(label="🔽 القيمة الصغرى (Min)", value=f"{min_val:.4f}")
+
+                st.info(f"💡 **تحليل هندسي:** تم استخراج هذه القيم بناءً على تحليل عينات حقيقية لمساحة {buffer_km} كم بدقة مكانية تبلغ {scale_val} متر.")
+
+            except Exception as e:
+                st.error(f"حدث خطأ أثناء المعالجة السحابية: {str(e)}")
