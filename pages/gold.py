@@ -1,6 +1,9 @@
 import json
 import ee
 import streamlit as st
+import folium
+from streamlit_folium import st_folium
+from folium.raster_layers import ImageOverlay
 
 # 1. إعداد واجهة الصفحة
 st.set_page_config(
@@ -10,7 +13,7 @@ st.set_page_config(
 )
 
 st.title("🛰️ المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية")
-st.markdown("نظام معالجة سحابي متكامل مع أداة استخراج وتحويل الإحداثيات الميدانية.")
+st.markdown("نظام معالجة سحابي متكامل لإسقاط الشذوذات على صور الواقع وتصدير الإحداثيات الميدانية.")
 
 # 2. تهيئة وتوثيق Google Earth Engine
 PROJECT_ID = "lively-armor-507414-s8"
@@ -67,6 +70,8 @@ aoi = ee.Geometry.Rectangle([
     target_lat + delta
 ])
 region = aoi.bounds().getInfo()["coordinates"]
+# استخراج حدود الإحداثيات لطبقة الإسقاط (Bounds for Folium Overlay)
+min_lon, min_lat, max_lon, max_lat = target_lon - delta, target_lat - delta, target_lon + delta, target_lat + delta
 
 st.sidebar.markdown("---")
 st.sidebar.header("🎛 خيارات المعالجة والطبقات")
@@ -79,16 +84,85 @@ show_thermal = st.sidebar.checkbox("الانبعاث الحراري (Thermal LST
 show_slope = st.sidebar.checkbox("انحدار المجرى (DEM Slope)", value=True)
 
 # تبويبات التطبيق الرئيسية
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📍 أداة استخراج وتوثيق الإحداثيات الحقلية",
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🗺️ الإسقاط الجوي والشفافية الميدانية",
+    "📍 أداة استخراج الإحداثيات والـ Waypoints",
     "🛰️ العرض والتحميل الفضائي", 
     "⚙️ نموذج الاحتمالية المرجح (WPI Engine)", 
-    "📍 استخراج وتصدير المتجهات (KML لـ AlpineQuest)"
+    "📍 استخراج وتصدير المتجهات (KML)"
 ])
 
 with tab1:
+    st.write("### 🗺️ خريطة الإسقاط والشفافية (إسقاط الشذوذ على صور الواقع عالي الدقة)")
+    st.markdown("تتيح لك هذه الخريطة استعراض صورة الأقمار الصناعية الحقيقية للواقع مع إسقاط خريطة الاحتمالية كطبقة شفافة (`Overlay`) لتحديد أماكن العروق بدقة متناهية.")
+
+    opacity_val = st.slider("درجة شفافية طبقة الشذوذ فوق الواقع:", 0.0, 1.0, 0.6, 0.05)
+
+    try:
+        # حساب خريطة الاحتمالية (WPI) لتوليد رابط الصورة الاسقاطية
+        l8_map = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
+        s2_map = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
+        dem_map = ee.Image("JAXA/ALOS/AW3D30/V1_1").select("AVE").clip(aoi)
+
+        silica_n = l8_map.select("SR_B6").divide(l8_map.select("SR_B7")).unitScale(0.8, 2.0)
+        iron_n = s2_map.select("B4").divide(s2_map.select("B2")).unitScale(0.9, 2.2)
+        clay_n = s2_map.select("B11").divide(s2_map.select("B12")).unitScale(0.9, 2.0)
+        slope_n = ee.Terrain.slope(dem_map).unitScale(0, 45)
+
+        wpi_map_layer = silica_n.multiply(0.4).add(iron_n.multiply(0.3)).add(clay_n.multiply(0.2)).add(slope_n.multiply(0.1)).rename("WPI")
+        
+        wpi_overlay_url = wpi_map_layer.getThumbURL({
+            "region": region,
+            "dimensions": "800x800",
+            "format": "jpg",
+            "min": 0.1,
+            "max": 0.8,
+            "palette": ["blue", "green", "yellow", "orange", "red"]
+        })
+
+        # بناء خريطة التفاعل (Folium)
+        m_real = folium.Map(location=[target_lat, target_lon], zoom_start=13, tiles=None)
+
+        # إضافة خلفية الأقمار الصناعية للواقع (Esri Satellite)
+        folium.TileLayer(
+            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            attr='Esri Satellite',
+            name='Esri Satellite',
+            overlay=False,
+            control=True
+        ).add_to(m_real)
+
+        # دمج طبقة الشذوذ فوق الواقع بشفافية قابلة للتحكم
+        ImageOverlay(
+            image=wpi_overlay_url,
+            bounds=[[min_lat, min_lon], [max_lat, max_lon]],
+            opacity=opacity_val,
+            name="طبقة الشذوذ الجيولوجي (WPI)"
+        ).add_to(m_real)
+
+        folium.Marker(
+            [target_lat, target_lon],
+            popup=f"مركز الدراسة الرئيسي<br>Lat: {target_lat}, Lon: {target_lon}",
+            icon=folium.Icon(color="red", icon="info-sign")
+        ).add_to(m_real)
+
+        folium.LayerControl().add_to(m_real)
+
+        # عرض الخريطة التفاعلية مع دعم النقر لاستخراج الإحداثيات
+        map_interaction = st_folium(m_real, width=800, height=550)
+
+        if map_interaction and map_interaction.get("last_clicked"):
+            c_lat = map_interaction["last_clicked"]["lat"]
+            c_lon = map_interaction["last_clicked"]["lng"]
+            st.success(mrow_msg := f"📍 **الإحداثية المحددة من خريطة الواقع:** Lat: {c_lat:.6f}, Lon: {c_lon:.6f}")
+            st.info("💡 يمكنك أخذ هذه الإحداثيات ونقلها للتاب التالي لتوليد ملف التوجيه KML.")
+
+    except Exception as e:
+        st.warning(f"جاري تحميل خريطة الإسقاط الميداني... (تأكد من اتصال GEE): {str(e)}")
+
+with tab2:
     st.write("### 📍 أداة تحديد وتحويل إحداثيات الأهداف الميدانية")
-    st.markdown("إذا استخرجت إحداثيات أي نقطة ملفتة للانتباه من خريطة الشذوذ أو Google Earth، أدخلها هنا لتحويلها فوراً إلى نقطة توجيه (Waypoint) وتصديرها لتطبيق الـ AlpineQuest.")
+    st.markdown("إذا استخرجت إحداثيات أي نقطة ملفتة للانتباه من خريطة الواقع أو الشذوذ، أدخلها هنا لتحويلها فوراً إلى نقطة توجيه (Waypoint) وتصديرها لتطبيق الـ AlpineQuest.")
 
     col_in1, col_in2 = st.columns(2)
     with col_in1:
@@ -114,7 +188,7 @@ with tab1:
         except Exception as e:
             st.error(f"حدث خطأ أثناء توليد نقطة الإحداثيات: {str(e)}")
 
-with tab2:
+with tab3:
     st.write(f"### 🛰️ الصور الفضائية بصيغة إطار مربع واتجاه الشمال - Lat: {target_lat}, Lon: {target_lon}")
 
     def display_and_download_ee_image(image_obj, vis_params, title_text, file_prefix, scale_res):
@@ -174,7 +248,7 @@ with tab2:
         slope = ee.Terrain.slope(dem).rename("Slope")
         display_and_download_ee_image(slope, {"min": 0, "max": 50, "palette": ["green", "yellow", "orange", "red"]}, "⛰️ انحدار المجرى ومصايد الذهب (DEM Slope)", "DEM_Slope", "30 متر")
 
-with tab3:
+with tab4:
     st.write("### ⚙️ محرك الاحتمالية المرجح لاستنباط عروق الذهب والمرو (WPI Engine)")
     st.markdown("هذا المحرك يدمج المعطيات بنظام أوزان احصائية متدرجة لتظهر خريطة الاحتمالات بوضوح تام بدون أي شاشة سوداء.")
 
@@ -228,7 +302,7 @@ with tab3:
             except Exception as e:
                 st.error(f"حدث خطأ أثناء تنفيذ نموذج الاحتمالية: {str(e)}")
 
-with tab4:
+with tab5:
     st.write("### 📍 التصدير الميداني المتجه (KML لـ Google Earth & AlpineQuest)")
     st.markdown("تحويل الشذوذ الطيفي لعروق المرو أو خطوط الهدف إلى مضلعات هندسية داخل الإطار المربع جاهزة للاستخدام الحقلي.")
 
