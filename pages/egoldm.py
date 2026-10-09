@@ -11,10 +11,10 @@ st.set_page_config(
 
 st.title("🛰️ المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية")
 st.markdown(
-    "نظام معالجة سحابي مدمج (Multi-Sensor Satellite Prospectivity Engine) للاستكشاف عن الذهب والمعادن المصاحبة (نسخة متوافقة مع الجوال)."
+    "نظام معالجة سحابي مدمج (Multi-Sensor Satellite Prospectivity Engine) للاستكشاف المعدني والهيدرولوجي مع دعم التنزيل للـ GIS."
 )
 
-# 2. تهيئة وتوثيق Google Earth Engine مع ربط اسم المشروع
+# 2. تهيئة وتوثيق Google Earth Engine
 PROJECT_ID = "lively-armor-507414-s8"
 
 
@@ -23,7 +23,6 @@ def init_earth_engine():
   try:
     if "GEE_SERVICE_ACCOUNT" in st.secrets:
       gee_secret = st.secrets["GEE_SERVICE_ACCOUNT"]
-
       if isinstance(gee_secret, str):
         cleaned_secret = gee_secret.replace("\r", "").replace("\t", " ")
         try:
@@ -41,7 +40,6 @@ def init_earth_engine():
         key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
 
       project_name = key_dict.get("project_id", PROJECT_ID)
-
       credentials = ee.ServiceAccountCredentials(
           key_dict["client_email"], key_data=json.dumps(key_dict)
       )
@@ -62,9 +60,8 @@ if not gee_ok:
 else:
   st.sidebar.success(f"✅ GEE Connected ({PROJECT_ID})")
 
-# 3. لوحة المدخلات الجانبية لتحديد أي منطقة في العالم
+# 3. لوحة المدخلات الجانبية
 st.sidebar.header("🎯 إعدادات منطقة الاستكشاف")
-
 default_lat = 15.3120
 default_lon = 44.1522
 
@@ -82,7 +79,6 @@ buffer_km = st.sidebar.slider(
     step=0.5,
 )
 
-# تحديد النطاق الجغرافي (AOI) ونطاق العرض على الخريطة
 point = ee.Geometry.Point([target_lon, target_lat])
 aoi = point.buffer(buffer_km * 1000)
 region = aoi.bounds().getInfo()["coordinates"]
@@ -106,14 +102,16 @@ show_slope = st.sidebar.checkbox(
 )
 
 st.write(
-    f"### 🛰️ نتائج التحليل الفضائي للمنطقة (Lat: {target_lat}, Lon:"
+    f"### 🛰️ نتائج التحليل الفضائي والتصدير للـ GIS (Lat: {target_lat}, Lon:"
     f" {target_lon})"
 )
 
-# دالة لتوليد وعرض الصورة الثابتة لكل طبقة
-def display_ee_image(image_obj, vis_params, title_text):
+
+# دالة لتوليد الصورة الثابتة ورابط تنزيل بصيغة GeoTIFF
+def display_and_download_ee_image(image_obj, vis_params, title_text, file_prefix):
   try:
-    with st.spinner(f"جاري معالجة وتحميل: {title_text}..."):
+    with st.spinner(f"جاري معالجة وتجهيز: {title_text}..."):
+      # 1. توليد رابط المعاينة كصورة
       thumb_url = image_obj.getThumbURL({
           "region": region,
           "dimensions": 600,
@@ -122,11 +120,23 @@ def display_ee_image(image_obj, vis_params, title_text):
       })
       st.subheader(title_text)
       st.image(thumb_url, use_container_width=True)
+
+      # 2. توليد رابط تحميل ملف الـ GeoTIFF لبرامج GIS
+      download_url = image_obj.getDownloadURL({
+          "name": file_prefix,
+          "region": aoi,
+          "scale": 10,  # دقة البكسل 10 متر
+          "format": "GEO_TIFF",
+      })
+      st.markdown(
+          f"📥 [تحميل الطبقة بصيغة GeoTIFF لبرامج الـ GIS]({download_url})"
+      )
+      st.markdown("---")
   except Exception as e:
-    st.warning(f"تعذر توليد صورة {title_text}: {str(e)}")
+    st.warning(f"تعذر معالجة {title_text}: {str(e)}")
 
 
-# 4. معالجة وعرض الطبقات المطلوبة بشكل مباشر
+# 4. معالجة وعرض الطبقات مع روابط التحميل
 if show_sentinel_rgb:
   s2 = (
       ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
@@ -136,10 +146,11 @@ if show_sentinel_rgb:
       .first()
       .clip(aoi)
   )
-  display_ee_image(
-      s2,
-      {"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000},
+  display_and_download_ee_image(
+      s2.select(["B4", "B3", "B2"]),
+      {"min": 0, "max": 3000},
       "📷 صورة ألوان طبيعية Sentinel-2 RGB",
+      "Sentinel_RGB",
   )
 
 if show_iron:
@@ -156,7 +167,7 @@ if show_iron:
       .divide(s2_iron.select("B2"))
       .rename("Iron_Oxide")
   )
-  display_ee_image(
+  display_and_download_ee_image(
       iron_ratio,
       {
           "min": 1.1,
@@ -164,6 +175,7 @@ if show_iron:
           "palette": ["blue", "yellow", "orange", "red"],
       },
       "🔥 نطاق أكسيد الحديد (Iron Oxide)",
+      "Iron_Oxide_Ratio",
   )
 
 if show_clay:
@@ -180,7 +192,7 @@ if show_clay:
       .divide(s2_clay.select("B12"))
       .rename("Clay_Alteration")
   )
-  display_ee_image(
+  display_and_download_ee_image(
       clay_ratio,
       {
           "min": 1.0,
@@ -188,6 +200,7 @@ if show_clay:
           "palette": ["black", "cyan", "green", "magenta"],
       },
       "🧪 التحول الطيني (Hydroxyl / Clay)",
+      "Clay_Alteration",
   )
 
 if show_silica:
@@ -201,16 +214,17 @@ if show_silica:
   silica_index = (
       l8.select("SR_B6").divide(l8.select("SR_B7")).rename("Silica_Index")
   )
-  display_ee_image(
+  display_and_download_ee_image(
       silica_index,
       {"min": 0.8, "max": 1.8, "palette": ["brown", "white", "purple"]},
       "💎 مؤشر السليكا والكوارتز (Landsat SWIR)",
+      "Silica_Index",
   )
 
 if show_slope:
   dem = ee.Image("JAXA/ALOS/AW3D30/V1_1").select("AVE").clip(aoi)
   slope = ee.Terrain.slope(dem).rename("Slope")
-  display_ee_image(
+  display_and_download_ee_image(
       slope,
       {
           "min": 0,
@@ -218,29 +232,5 @@ if show_slope:
           "palette": ["green", "yellow", "orange", "red"],
       },
       "⛰️ انحدار المجرى والمصايد (ALOS DEM Slope)",
-  )
-
-st.markdown("---")
-st.write("### 📖 دليل التفسير الجيوفيزيائي للمصايد والشذوذات:")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-  st.info(
-      "**🔥 أكسيد الحديد والطين:**\nاللون الأحمر في أكسيد الحديد والوردي/الماجنتا"
-      " في الطين يدل على نطاقات تجوية كبريتيدات الحديد والتطفر الهيدروحراري"
-      " (Gossan / Alteration Zones)."
-  )
-
-with col2:
-  st.success(
-      "**💎 السليكا والانبعاث الحراري:**\nاللون الأرجواني/الأبيض في السليكا يوضح"
-      " عروق الكوارتز والمناطق الغنية بالسليكا التي غالباً ما تحتضن تمعدنات"
-      " الذهب العرقي."
-  )
-
-with col3:
-  st.warning(
-      "**⛰️ انحدار المجرى والمصايد:**\nتغير الانحدار من الأحمر إلى الأخضر/الأصفر"
-      " يمثل نقاط انكسار المجرى (Slope Break)، وهي المصايد الرسوبية المثالية"
-      " لتجمع الذهب الودي."
+      "DEM_Slope",
   )
