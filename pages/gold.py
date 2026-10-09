@@ -4,41 +4,30 @@ import folium
 from streamlit_folium import st_folium
 import json
 
-# 1. إعدادات الصفحة
+# ---------------------------------------------------------
+# 1. إعدادات الصفحة والواجهة
+# ---------------------------------------------------------
 st.set_page_config(
     page_title="منصة الاستكشاف المعدني والفضائي المتقدمة",
     page_icon="🛰️",
     layout="wide"
 )
 
-# 2. تهيئة Earth Engine مع معالجة مفاتيح Secrets
+# ---------------------------------------------------------
+# 2. تهيئة Google Earth Engine مع معالجة الاستثناءات
+# ---------------------------------------------------------
 @st.cache_resource
 def init_earth_engine():
     try:
-        project_id = "lively-armor-507414-s8"
-        
         if "GEE_SERVICE_ACCOUNT" in st.secrets:
-            sec = st.secrets["GEE_SERVICE_ACCOUNT"]
-            if hasattr(sec, "to_dict"):
-                secrets_dict = sec.to_dict()
-            elif isinstance(sec, str):
-                secrets_dict = json.loads(sec, strict=False)
-            else:
-                secrets_dict = dict(sec)
-
-            if "private_key" in secrets_dict:
-                pk = secrets_dict["private_key"]
-                if isinstance(pk, str):
-                    secrets_dict["private_key"] = pk.replace("\\n", "\n")
-
+            secrets_dict = dict(st.secrets["GEE_SERVICE_ACCOUNT"])
             credentials = ee.ServiceAccountCredentials(
                 secrets_dict["client_email"],
                 key_data=json.dumps(secrets_dict)
             )
-            ee.Initialize(credentials, project=project_id)
+            ee.Initialize(credentials, project="lively-armor-507414-s8")
         else:
-            ee.Initialize(project=project_id)
-            
+            ee.Initialize(project="lively-armor-507414-s8")
         return True
     except Exception as e:
         st.error(f"فشل الاتصال بـ Google Earth Engine: {e}")
@@ -46,7 +35,9 @@ def init_earth_engine():
 
 ee_initialized = init_earth_engine()
 
-# 3. واجهة المستخدم والشريط الجانبي
+# ---------------------------------------------------------
+# 3. الواجهة الرئيسية والشريط الجانبي (Sidebar Controls)
+# ---------------------------------------------------------
 st.title("المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية 🛰️")
 st.caption("Multi-Sensor Satellite Prospectivity Engine - نظام استكشاف الذهب والتعدن الهيدروحراري")
 
@@ -58,13 +49,14 @@ buffer_km = st.sidebar.slider("نطاق التحليل (كم)", min_value=5, max
 
 st.subheader(f"🗺️ خريطة التحليل الفضائي والطيفي التفاعلية ({lat:.4f}, {lon:.4f})")
 
-# 4. بناء الخريطة والطبقات
+# ---------------------------------------------------------
+# 4. بناء الخريطة وطبقات الاستكشاف الطيفي والحراري والارتفاعات
+# ---------------------------------------------------------
 if ee_initialized:
     try:
         point = ee.Geometry.Point([lon, lat])
         roi = point.buffer(buffer_km * 1000)
 
-        # إنشاء خريطة Folium الأساسية
         m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles="OpenStreetMap")
 
         def add_ee_layer(ee_image_object, vis_params, name, show=True):
@@ -78,14 +70,18 @@ if ee_initialized:
                 show=show
             ).add_to(m)
 
-        # أ) ALOS DEM V3_2 - النموذج الرقمي للارتفاعات والميول
-        dem = ee.ImageCollection("JAXA/ALOS/AW3D30/V3_2").select('DSM').mosaic().clip(roi)
+        # ---------------------------------------------------------
+        # أ) ALOS DEM V3_2 - الارتفاعات والانحدار والشذوذ الهيدرولوجي
+        # ---------------------------------------------------------
+        dem = ee.Image("JAXA/ALOS/AW3D30/V3_2").select('DSM').clip(roi)
         slope = ee.Terrain.slope(dem)
         
         add_ee_layer(dem, {'min': 500, 'max': 3000, 'palette': ['0000ff', '00ffff', 'ffff00', 'ff0000', 'ffffff']}, "النموذج الرقمي للارتفاعات (ALOS DEM V3.2)", show=False)
         add_ee_layer(slope, {'min': 0, 'max': 45, 'palette': ['white', 'black']}, "مخطط الميول والانكسارات (Slope)", show=False)
 
-        # ب) Sentinel-2 SR - مؤشرات استكشاف الذهب
+        # ---------------------------------------------------------
+        # ب) Sentinel-2 SR - أدلة استكشاف الذهب والتعدن الهيدروحراري (SWIR & VNIR)
+        # ---------------------------------------------------------
         s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
               .filterBounds(roi)
               .filterDate('2023-01-01', '2024-01-01')
@@ -93,42 +89,54 @@ if ee_initialized:
               .median()
               .clip(roi))
 
+        # 1. مؤشر أكسيد الحديد (Iron Oxide) -> B4 / B2 (Red / Blue) - دلالة على القبعات الحديدية (Gossan)
         iron_oxide = s2.select('B4').divide(s2.select('B2'))
+        
+        # 2. مؤشر معادن الطين والتطفر الهيدروحراري (Clay Alteration / Hydrothermal) -> B11 / B12 (SWIR1 / SWIR2)
         clay_alteration = s2.select('B11').divide(s2.select('B12'))
+        
+        # 3. مؤشر المعادن الحديدية والسليكا (Ferrous Minerals / Silica Proxy) -> B12 / B8 + B11 / B4
         silica_ferrous = s2.select('B12').divide(s2.select('B8'))
+
+        # 4. تركيبة ألوان استكشاف الذهب (Gold Prospecting Composite RGB: SWIR2, SWIR1, Red)
         gold_composite = s2.select(['B12', 'B11', 'B4'])
 
+        # إضافة طبقات Sentinel-2 للخريطة
         add_ee_layer(gold_composite, {'min': 500, 'max': 4500}, "تركيبة استكشاف الذهب (RGB: SWIR2, SWIR1, Red)", show=True)
         add_ee_layer(iron_oxide, {'min': 1.1, 'max': 2.3, 'palette': ['blue', 'yellow', 'red']}, "شذوذات أكسيد الحديد (Gossan / Iron Oxide)", show=True)
         add_ee_layer(clay_alteration, {'min': 1.0, 'max': 2.2, 'palette': ['gray', 'cyan', 'magenta']}, "نطاقات التحول الطيني (Alunite/Kaolinite/Sericite)", show=True)
         add_ee_layer(silica_ferrous, {'min': 0.5, 'max': 1.8, 'palette': ['black', 'green', 'white']}, "مؤشر السليكا والمعادن الحديدية (Ferrous/Silica)", show=False)
 
+        # ---------------------------------------------------------
         # ج) Landsat 8/9 Thermal Infrared (TIR) - الانبعاث الحراري
+        # ---------------------------------------------------------
         l8_thermal = (ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
                       .filterBounds(roi)
                       .filterDate('2023-01-01', '2024-01-01')
                       .filter(ee.Filter.lt('CLOUD_COVER', 10))
                       .select('ST_B10')
                       .median()
-                      .multiply(0.00341802).add(149.0)
-                      .subtract(273.15)
+                      .multiply(0.00341802).add(149.0) # تحويل لقياس درجة الحرارة بالسيليزيوس
+                      .sub(273.15)
                       .clip(roi))
 
         add_ee_layer(l8_thermal, {'min': 20, 'max': 50, 'palette': ['blue', 'green', 'yellow', 'orange', 'red']}, "الانبعاث الحراري (TIR Band 10 Surface Temp)", show=False)
 
-        # أدوات التحكم وعلامة الموقع
+        # إضافة أدوات التحكم والرمز المرجعي
         folium.LayerControl(collapsed=False).add_to(m)
         folium.Marker([lat, lon], popup="مرجع التحليل الحقلي").add_to(m)
 
-        # رندر خفيف وسريع ومباشر
-        st_folium(m, height=500, use_container_width=True, returned_objects=[])
+        # عرض الخريطة مع إلغاء الأجسام المرتجعة للسرعة
+        st_folium(m, width="100%", height=550, returned_objects=[])
 
     except Exception as err:
         st.error(f"خطأ في معالجة الطبقات الفضائية: {err}")
 else:
     st.warning("بانتظار تهيئة Google Earth Engine...")
 
-# 5. الدليل الجيوفيزيائي والطيفي
+# ---------------------------------------------------------
+# 5. دليل التفسير الجيوفيزيائي والطيفي المفصل
+# ---------------------------------------------------------
 st.markdown("---")
 st.subheader("📖 دليل التفسير الجيوفيزيائي والأدلة الطيفية للذهب:")
 
