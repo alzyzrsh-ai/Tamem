@@ -96,24 +96,21 @@ with tab1:
     with col_in2:
         target_point_lon = st.number_input("خط الطول للنقطة المستهدفة (Target Lon):", value=target_lon, format="%.6f")
 
-    target_name = st.text_input("اسم النقطة أو الهدف الميداني:", value="عرق_مرو_مستهدف_1")
+    target_name = st.text_input("اسم النقطة أو الهدف الميداني:", value="Target_Waypoint")
 
     if st.button("📌 توليد نقطة التوجيه وتصديرها كملف KML"):
         try:
-            # إنشاء نقطة هندسية في GEE
             pt = ee.Geometry.Point([target_point_lon, target_point_lat])
             pt_feature = ee.Feature(pt, {"name": target_name})
             fc = ee.FeatureCollection([pt_feature])
 
-            pt_kml_url = fc.getDownloadURL({
-                'format': 'kml',
-                'filename': f'{target_name}_Waypoint'
-            })
+            # تصحيح دالة التصدير لتجنب خطأ الـ dict
+            pt_kml_url = fc.getDownloadURL('kml')
 
-            st.success(f"✅ تم توليد نقطة التوجيه لـ ({target_name}) بنجاح!")
+            st.success(f"✅ تم توليد نقطة التوجيه بنجاح!")
             st.code(f"الإحداثيات المعتمدة:\nLat: {target_point_lat:.6f}\nLon: {target_point_lon:.6f}")
             st.markdown(f"📥 **[انقر هنا لتحميل ملف الـ KML الخاص بهذه النقطة لـ AlpineQuest]({pt_kml_url})**")
-            st.info("💡 افتح هذا الملف مباشرة في هاتفك عبر تطبيق **AlpineQuest** للتوجه المباشر نحو الإحداثية في الحقل.")
+            st.info("💡 افتح هذا الملف مباشرة في هاتفك عبر تطبيق **AlpineQuest** أو **Google Earth** للتوجه المباشر نحو الإحداثية في الحقل.")
 
         except Exception as e:
             st.error(f"حدث خطأ أثناء توليد نقطة الإحداثيات: {str(e)}")
@@ -159,125 +156,4 @@ with tab2:
         display_and_download_ee_image(iron_ratio, {"min": 0.8, "max": 2.5, "palette": ["blue", "yellow", "orange", "red"]}, "🔥 نطاق أكسيد الحديد (Iron Oxide - من الأدنى للأعلى)", "Iron_Oxide", "10 متر")
 
     if show_clay:
-        s2_clay = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
-        clay_ratio = s2_clay.select("B11").divide(s2_clay.select("B12")).rename("Clay_Alteration")
-        display_and_download_ee_image(clay_ratio, {"min": 0.9, "max": 2.2, "palette": ["black", "cyan", "green", "magenta"]}, "🧪 التحول الطيني (SWIR B11/B12 - مقياس متدرج)", "Clay_SWIR", "20 متر")
-
-    if show_silica:
-        l8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
-        silica_index = l8.select("SR_B6").divide(l8.select("SR_B7")).rename("Silica_Index")
-        display_and_download_ee_image(silica_index, {"min": 0.7, "max": 2.0, "palette": ["brown", "white", "purple"]}, "💎 مؤشر السليكا والكوارتز (Landsat SWIR - عروق المرو)", "Silica_Index", "30 متر")
-
-    if show_thermal:
-        l8_thermal = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
-        thermal_band = l8_thermal.select("ST_B10").multiply(0.00341802).add(149.0).rename("Thermal")
-        display_and_download_ee_image(thermal_band, {"min": 275, "max": 325, "palette": ["blue", "green", "red"]}, "🌡️ الانبعاث الحراري (Thermal LST)", "Thermal_LST", "30 متر")
-
-    if show_slope:
-        dem = ee.Image("JAXA/ALOS/AW3D30/V1_1").select("AVE").clip(aoi)
-        slope = ee.Terrain.slope(dem).rename("Slope")
-        display_and_download_ee_image(slope, {"min": 0, "max": 50, "palette": ["green", "yellow", "orange", "red"]}, "⛰️ انحدار المجرى ومصايد الذهب (DEM Slope)", "DEM_Slope", "30 متر")
-
-with tab3:
-    st.write("### ⚙️ محرك الاحتمالية المرجح لاستنباط عروق الذهب والمرو (WPI Engine)")
-    st.markdown("هذا المحرك يدمج المعطيات بنظام أوزان احصائية متدرجة لتظهر خريطة الاحتمالات بوضوح تام بدون أي شاشة سوداء.")
-
-    col_w1, col_w2 = st.columns(2)
-    with col_w1:
-        w_silica = st.slider("وزن مؤشر السليكا (عروق المرو):", 0.0, 1.0, 0.4, 0.05)
-        w_iron = st.slider("وزن نطاق أكسيد الحديد:", 0.0, 1.0, 0.3, 0.05)
-    with col_w2:
-        w_clay = st.slider("وزن التحول الطيني:", 0.0, 1.0, 0.2, 0.05)
-        w_slope = st.slider("وزن الانحدار الطبوغرافي:", 0.0, 1.0, 0.1, 0.05)
-
-    if st.button("🚀 حساب خريطة الاحتمالية الاستكشافية (WPI)"):
-        with st.spinner("جاري معالجة ونمذجة المؤشرات الطيفية والطبوغرافية..."):
-            try:
-                l8_m = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
-                s2_m = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
-                dem_m = ee.Image("JAXA/ALOS/AW3D30/V1_1").select("AVE").clip(aoi)
-
-                silica_n = l8_m.select("SR_B6").divide(l8_m.select("SR_B7")).unitScale(0.8, 2.0)
-                iron_n = s2_m.select("B4").divide(s2_m.select("B2")).unitScale(0.9, 2.2)
-                clay_n = s2_m.select("B11").divide(s2_m.select("B12")).unitScale(0.9, 2.0)
-                slope_n = ee.Terrain.slope(dem_m).unitScale(0, 45)
-
-                wpi_map = silica_n.multiply(w_silica) \
-                    .add(iron_n.multiply(w_iron)) \
-                    .add(clay_n.multiply(w_clay)) \
-                    .add(slope_n.multiply(w_slope)) \
-                    .rename("WPI_Target")
-
-                wpi_thumb = wpi_map.getThumbURL({
-                    "region": region,
-                    "dimensions": "800x800",
-                    "format": "jpg",
-                    "min": 0.1,
-                    "max": 0.8,
-                    "palette": ["blue", "green", "yellow", "orange", "red"]
-                })
-
-                st.success("✅ تم حساب خريطة الاحتمالية الاستكشافية بنجاح!")
-                st.subheader("🎯 خريطة الاحتمال المرجح لعروق المرو والذهب")
-                st.image(wpi_thumb, use_container_width=True, caption="🧭 اتجاه الشمال نحو الأعلى | الألوان من الأزرق (أقل احتمالاً) إلى الأحمر (أعلى احتمالية للهدف)")
-
-                wpi_download = wpi_map.getDownloadURL({
-                    "name": "Gold_Prospectivity_WPI_Map",
-                    "region": aoi,
-                    "scale": 15,
-                    "format": "GEO_TIFF"
-                })
-                st.markdown(f"📥 [تحميل خريطة الاحتمالية بصيغة GeoTIFF للـ GIS]({wpi_download})")
-
-            except Exception as e:
-                st.error(f"حدث خطأ أثناء تنفيذ نموذج الاحتمالية: {str(e)}")
-
-with tab4:
-    st.write("### 📍 التصدير الميداني المتجه (KML لـ Google Earth & AlpineQuest)")
-    st.markdown("تحويل الشذوذ الطيفي لعروق المرو أو خطوط الهدف إلى مضلعات هندسية داخل الإطار المربع جاهزة للاستخدام الحقلي.")
-
-    vector_target = st.selectbox("اختر الطبقة المراد تحويلها إلى متجهات:", [
-        "مؤشر السليكا وعروق الكوارتز (Landsat SWIR)",
-        "نطاق أكسيد الحديد (Iron Oxide)",
-        "التحول الطيني (Clay Alteration)"
-    ])
-
-    threshold_val = st.slider("عتبة فصل الشذوذ (Threshold من الأدنى للأعلى):", 0.8, 2.5, 1.2, 0.05)
-
-    if st.button("🗺️ استخراج المتجهات وتوليد ملف KML الميداني"):
-        with st.spinner("جاري تحويل الشذوذات إلى مضلعات وخطوط متجهة (Vectors)..."):
-            try:
-                l8_v = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
-                s2_v = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
-                
-                if "السليكا" in vector_target:
-                    raw_img = l8_v.select("SR_B6").divide(l8_v.select("SR_B7"))
-                    scale_v = 30
-                elif "أكسيد الحديد" in vector_target:
-                    raw_img = s2_v.select("B4").divide(s2_v.select("B2"))
-                    scale_v = 10
-                else:
-                    raw_img = s2_v.select("B11").divide(s2_v.select("B12"))
-                    scale_v = 20
-
-                mask = raw_img.gt(threshold_val)
-
-                vectors = mask.selfMask().reduceToVectors(
-                    geometry=aoi,
-                    scale=scale_v,
-                    geometryType='polygon',
-                    eightConnected=True,
-                    maxPixels=1e9
-                )
-
-                kml_url = vectors.getDownloadURL({
-                    'format': 'kml',
-                    'filename': 'Target_Veins_KML'
-                })
-
-                st.success("✅ تم استخراج معالم الهدف المتجهة بنجاح!")
-                st.markdown(f"📥 **[انقر هنا لتحميل ملف الـ KML الميداني]({kml_url})**")
-                st.info("💡 **طريقة الاستخدام:** قم بتحميل الملف، ثم فتحه مباشرة في تطبيق **AlpineQuest** على هاتفك المحمول أو إفلاته في **Google Earth** لرؤية امتداد العروق والشذوذات مرسومة بدقة في الموقع الحقيقي.")
-
-            except Exception as e:
-                st.error(f"حدث خطأ أثناء استخراج المتجهات: {str(e)}")
+        s2_clay = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(
