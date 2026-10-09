@@ -1,8 +1,6 @@
 import json
 import ee
 import streamlit as st
-import folium
-from streamlit_folium import st_folium
 
 # 1. إعداد واجهة الصفحة
 st.set_page_config(
@@ -12,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("🛰️ المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية")
-st.markdown("نظام معالجة سحابي متكامل مع الخرائط التاعلية لاستخراج الإحداثيات الميدانية.")
+st.markdown("نظام معالجة سحابي متكامل مع أداة استخراج وتحويل الإحداثيات الميدانية.")
 
 # 2. تهيئة وتوثيق Google Earth Engine
 PROJECT_ID = "lively-armor-507414-s8"
@@ -57,8 +55,8 @@ st.sidebar.header("🎯 إعدادات منطقة الاستكشاف")
 default_lat = 15.3120
 default_lon = 44.1522
 
-target_lat = st.sidebar.number_input("خط العرض (Latitude):", value=default_lat, format="%.6f")
-target_lon = st.sidebar.number_input("خط الطول (Longitude):", value=default_lon, format="%.6f")
+target_lat = st.sidebar.number_input("خط العرض الرئيسي (Latitude):", value=default_lat, format="%.6f")
+target_lon = st.sidebar.number_input("خط الطول الرئيسي (Longitude):", value=default_lon, format="%.6f")
 buffer_km = st.sidebar.slider("نصف قطر نطاق الدراسة (كيلومتر):", min_value=1.0, max_value=10.0, value=2.0, step=0.5)
 
 delta = buffer_km / 111.0
@@ -82,47 +80,43 @@ show_slope = st.sidebar.checkbox("انحدار المجرى (DEM Slope)", value=
 
 # تبويبات التطبيق الرئيسية
 tab1, tab2, tab3, tab4 = st.tabs([
-    "🗺️ الخريطة التفاعلية واستخراج الإحداثيات",
+    "📍 أداة استخراج وتوثيق الإحداثيات الحقلية",
     "🛰️ العرض والتحميل الفضائي", 
     "⚙️ نموذج الاحتمالية المرجح (WPI Engine)", 
     "📍 استخراج وتصدير المتجهات (KML لـ AlpineQuest)"
 ])
 
 with tab1:
-    st.write("### 🗺️ الخريطة التفاعلية (انقر في أي مكان لمعرفة الإحداثيات ودقة الموقع)")
-    st.markdown("تتيح لك هذه الخريطة استعراض الموقع والنقر للحصول على إحداثيات أي نقطة اهتمام فوراً.")
+    st.write("### 📍 أداة تحديد وتحويل إحداثيات الأهداف الميدانية")
+    st.markdown("إذا استخرجت إحداثيات أي نقطة ملفتة للانتباه من خريطة الشذوذ أو Google Earth، أدخلها هنا لتحويلها فوراً إلى نقطة توجيه (Waypoint) وتصديرها لتطبيق الـ AlpineQuest.")
 
-    # إنشاء خريطة تفاعلية باستخدام Folium
-    m = folium.Map(location=[target_lat, target_lon], zoom_start=13, tiles="OpenStreetMap")
+    col_in1, col_in2 = st.columns(2)
+    with col_in1:
+        target_point_lat = st.number_input("خط العرض للنقطة المستهدفة (Target Lat):", value=target_lat, format="%.6f")
+    with col_in2:
+        target_point_lon = st.number_input("خط الطول للنقطة المستهدفة (Target Lon):", value=target_lon, format="%.6f")
 
-    # إضافة طبقة الأقمار الصناعية كخلفية اختيارية
-    folium.TileLayer(
-        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        attr='Esri',
-        name='Esri Satellite',
-        overlay=False,
-        control=True
-    ).add_to(m)
+    target_name = st.text_input("اسم النقطة أو الهدف الميداني:", value="عرق_مرو_مستهدف_1")
 
-    # إضافة علامة لمركز الدراسة الحالي
-    folium.Marker(
-        [target_lat, target_lon],
-        popup=f"مركز الدراسة الرئيسي<br>Lat: {target_lat}, Lon: {target_lon}",
-        icon=folium.Icon(color="red", icon="info-sign")
-    ).add_to(m)
+    if st.button("📌 توليد نقطة التوجيه وتصديرها كملف KML"):
+        try:
+            # إنشاء نقطة هندسية في GEE
+            pt = ee.Geometry.Point([target_point_lon, target_point_lat])
+            pt_feature = ee.Feature(pt, {"name": target_name})
+            fc = ee.FeatureCollection([pt_feature])
 
-    folium.LayerControl().add_to(m)
+            pt_kml_url = fc.getDownloadURL({
+                'format': 'kml',
+                'filename': f'{target_name}_Waypoint'
+            })
 
-    # عرض الخريطة داخل Streamlit والتقاط نقاط النقر
-    map_data = st_folium(m, width=800, height=500)
+            st.success(f"✅ تم توليد نقطة التوجيه لـ ({target_name}) بنجاح!")
+            st.code(f"الإحداثيات المعتمدة:\nLat: {target_point_lat:.6f}\nLon: {target_point_lon:.6f}")
+            st.markdown(f"📥 **[انقر هنا لتحميل ملف الـ KML الخاص بهذه النقطة لـ AlpineQuest]({pt_kml_url})**")
+            st.info("💡 افتح هذا الملف مباشرة في هاتفك عبر تطبيق **AlpineQuest** للتوجه المباشر نحو الإحداثية في الحقل.")
 
-    # إذا قام المستخدم بالنقر على الخريطة، يتم استخراج إحداثيات النقطة المعينة وعرضها
-    if map_data and map_data.get("last_clicked"):
-        clicked_lat = map_data["last_clicked"]["lat"]
-        clicked_lon = map_data["last_clicked"]["lng"]
-        st.success(f"📍 **تم تحديد الإحداثيات بنجاح من الخريطة التفاعلية:**")
-        st.code(f"Latitude (خط العرض): {clicked_lat:.6f}\nLongitude (خط الطول): {clicked_lon:.6f}")
-        st.info("💡 يمكنك نسخ هذه الإحداثيات مباشرة ووضعها في تطبيق الـ AlpineQuest أو أجهزة الـ GPS الميدانية.")
+        except Exception as e:
+            st.error(f"حدث خطأ أثناء توليد نقطة الإحداثيات: {str(e)}")
 
 with tab2:
     st.write(f"### 🛰️ الصور الفضائية بصيغة إطار مربع واتجاه الشمال - Lat: {target_lat}, Lon: {target_lon}")
