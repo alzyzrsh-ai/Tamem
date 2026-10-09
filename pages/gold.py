@@ -1,6 +1,8 @@
 import json
 import ee
 import streamlit as st
+import folium
+from streamlit_folium import st_folium
 
 # 1. إعداد واجهة الصفحة
 st.set_page_config(
@@ -10,7 +12,7 @@ st.set_page_config(
 )
 
 st.title("🛰️ المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية")
-st.markdown("نظام المعالجة والدمج البرمجي المتقدم لاستنباط وتقاطع عروق الذهب والمرو وتصديرها ميدانياً.")
+st.markdown("نظام معالجة سحابي متكامل مع الخرائط التاعلية لاستخراج الإحداثيات الميدانية.")
 
 # 2. تهيئة وتوثيق Google Earth Engine
 PROJECT_ID = "lively-armor-507414-s8"
@@ -79,13 +81,50 @@ show_thermal = st.sidebar.checkbox("الانبعاث الحراري (Thermal LST
 show_slope = st.sidebar.checkbox("انحدار المجرى (DEM Slope)", value=True)
 
 # تبويبات التطبيق الرئيسية
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🗺️ الخريطة التفاعلية واستخراج الإحداثيات",
     "🛰️ العرض والتحميل الفضائي", 
     "⚙️ نموذج الاحتمالية المرجح (WPI Engine)", 
     "📍 استخراج وتصدير المتجهات (KML لـ AlpineQuest)"
 ])
 
 with tab1:
+    st.write("### 🗺️ الخريطة التفاعلية (انقر في أي مكان لمعرفة الإحداثيات ودقة الموقع)")
+    st.markdown("تتيح لك هذه الخريطة استعراض الموقع والنقر للحصول على إحداثيات أي نقطة اهتمام فوراً.")
+
+    # إنشاء خريطة تفاعلية باستخدام Folium
+    m = folium.Map(location=[target_lat, target_lon], zoom_start=13, tiles="OpenStreetMap")
+
+    # إضافة طبقة الأقمار الصناعية كخلفية اختيارية
+    folium.TileLayer(
+        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attr='Esri',
+        name='Esri Satellite',
+        overlay=False,
+        control=True
+    ).add_to(m)
+
+    # إضافة علامة لمركز الدراسة الحالي
+    folium.Marker(
+        [target_lat, target_lon],
+        popup=f"مركز الدراسة الرئيسي<br>Lat: {target_lat}, Lon: {target_lon}",
+        icon=folium.Icon(color="red", icon="info-sign")
+    ).add_to(m)
+
+    folium.LayerControl().add_to(m)
+
+    # عرض الخريطة داخل Streamlit والتقاط نقاط النقر
+    map_data = st_folium(m, width=800, height=500)
+
+    # إذا قام المستخدم بالنقر على الخريطة، يتم استخراج إحداثيات النقطة المعينة وعرضها
+    if map_data and map_data.get("last_clicked"):
+        clicked_lat = map_data["last_clicked"]["lat"]
+        clicked_lon = map_data["last_clicked"]["lng"]
+        st.success(f"📍 **تم تحديد الإحداثيات بنجاح من الخريطة التفاعلية:**")
+        st.code(f"Latitude (خط العرض): {clicked_lat:.6f}\nLongitude (خط الطول): {clicked_lon:.6f}")
+        st.info("💡 يمكنك نسخ هذه الإحداثيات مباشرة ووضعها في تطبيق الـ AlpineQuest أو أجهزة الـ GPS الميدانية.")
+
+with tab2:
     st.write(f"### 🛰️ الصور الفضائية بصيغة إطار مربع واتجاه الشمال - Lat: {target_lat}, Lon: {target_lon}")
 
     def display_and_download_ee_image(image_obj, vis_params, title_text, file_prefix, scale_res):
@@ -145,7 +184,7 @@ with tab1:
         slope = ee.Terrain.slope(dem).rename("Slope")
         display_and_download_ee_image(slope, {"min": 0, "max": 50, "palette": ["green", "yellow", "orange", "red"]}, "⛰️ انحدار المجرى ومصايد الذهب (DEM Slope)", "DEM_Slope", "30 متر")
 
-with tab2:
+with tab3:
     st.write("### ⚙️ محرك الاحتمالية المرجح لاستنباط عروق الذهب والمرو (WPI Engine)")
     st.markdown("هذا المحرك يدمج المعطيات بنظام أوزان احصائية متدرجة لتظهر خريطة الاحتمالات بوضوح تام بدون أي شاشة سوداء.")
 
@@ -164,13 +203,11 @@ with tab2:
                 s2_m = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
                 dem_m = ee.Image("JAXA/ALOS/AW3D30/V1_1").select("AVE").clip(aoi)
 
-                # تطبيع القيم (Normalization) لتصبح بين 0 و 1 لضمان دقة الدمج
                 silica_n = l8_m.select("SR_B6").divide(l8_m.select("SR_B7")).unitScale(0.8, 2.0)
                 iron_n = s2_m.select("B4").divide(s2_m.select("B2")).unitScale(0.9, 2.2)
                 clay_n = s2_m.select("B11").divide(s2_m.select("B12")).unitScale(0.9, 2.0)
                 slope_n = ee.Terrain.slope(dem_m).unitScale(0, 45)
 
-                # دمج المؤشرات بناءً على الأوزان المحددة
                 wpi_map = silica_n.multiply(w_silica) \
                     .add(iron_n.multiply(w_iron)) \
                     .add(clay_n.multiply(w_clay)) \
@@ -201,7 +238,7 @@ with tab2:
             except Exception as e:
                 st.error(f"حدث خطأ أثناء تنفيذ نموذج الاحتمالية: {str(e)}")
 
-with tab3:
+with tab4:
     st.write("### 📍 التصدير الميداني المتجه (KML لـ Google Earth & AlpineQuest)")
     st.markdown("تحويل الشذوذ الطيفي لعروق المرو أو خطوط الهدف إلى مضلعات هندسية داخل الإطار المربع جاهزة للاستخدام الحقلي.")
 
