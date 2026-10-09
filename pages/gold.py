@@ -81,7 +81,7 @@ show_slope = st.sidebar.checkbox("انحدار المجرى (DEM Slope)", value=
 # تبويبات التطبيق الرئيسية
 tab1, tab2, tab3 = st.tabs([
     "🛰️ العرض والتحميل الفضائي", 
-    "⚙️ الدمج البرمجي ونموذج الترجيح (MCPI)", 
+    "⚙️ نموذج الاحتمالية المرجح (WPI Engine)", 
     "📍 استخراج وتصدير المتجهات (KML لـ AlpineQuest)"
 ])
 
@@ -146,62 +146,60 @@ with tab1:
         display_and_download_ee_image(slope, {"min": 0, "max": 50, "palette": ["green", "yellow", "orange", "red"]}, "⛰️ انحدار المجرى ومصايد الذهب (DEM Slope)", "DEM_Slope", "30 متر")
 
 with tab2:
-    st.write("### ⚙️ محرك الدمج البرمجي ونموذج التقاطع الترجيحي (Multi-Criteria Prospectivity Model)")
-    st.markdown("يقوم هذا المحرك بدمج معطيات (السليكا + أكسيد الحديد + التحول الطيني + الانحدار) في خوارزمية برمجية واحدة لعزل نقاط التقاطع المستهدفة لعروق المرو والذهب بدقة.")
+    st.write("### ⚙️ محرك الاحتمالية المرجح لاستنباط عروق الذهب والمرو (WPI Engine)")
+    st.markdown("هذا المحرك يدمج المعطيات بنظام أوزان احصائية متدرجة لتظهر خريطة الاحتمالات بوضوح تام بدون أي شاشة سوداء.")
 
-    col_m1, col_m2 = st.columns(2)
-    with col_m1:
-        silica_th = st.slider("عتبة مؤشر السليكا والكوارتز:", 1.0, 2.0, 1.2, 0.05)
-        iron_th = st.slider("عتبة نطاق أكسيد الحديد:", 1.0, 2.5, 1.4, 0.05)
-    with col_m2:
-        clay_th = st.slider("عتبة التحول الطيني:", 1.0, 2.0, 1.3, 0.05)
-        slope_th = st.slider("عتبة الانحدار المناسب (درجات):", 5.0, 40.0, 15.0, 1.0)
+    col_w1, col_w2 = st.columns(2)
+    with col_w1:
+        w_silica = st.slider("وزن مؤشر السليكا (عروق المرو):", 0.0, 1.0, 0.4, 0.05)
+        w_iron = st.slider("وزن نطاق أكسيد الحديد:", 0.0, 1.0, 0.3, 0.05)
+    with col_w2:
+        w_clay = st.slider("وزن التحول الطيني:", 0.0, 1.0, 0.2, 0.05)
+        w_slope = st.slider("وزن الانحدار الطبوغرافي:", 0.0, 1.0, 0.1, 0.05)
 
-    if st.button("🚀 تشغيل خوارزمية دمج واستنباط العروق (MCPI Model)"):
-        with st.spinner("جاري مطابقة الطبقات ومعالجة التقاطعات برمجياً..."):
+    if st.button("🚀 حساب خريطة الاحتمالية الاستكشافية (WPI)"):
+        with st.spinner("جاري معالجة ونمذجة المؤشرات الطيفية والطبوغرافية..."):
             try:
-                # 1. جلب وتحضير البيانات
                 l8_m = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
                 s2_m = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
                 dem_m = ee.Image("JAXA/ALOS/AW3D30/V1_1").select("AVE").clip(aoi)
 
-                silica_img = l8_m.select("SR_B6").divide(l8_m.select("SR_B7"))
-                iron_img = s2_m.select("B4").divide(s2_m.select("B2"))
-                clay_img = s2_m.select("B11").divide(s2_m.select("B12"))
-                slope_img = ee.Terrain.slope(dem_m)
+                # تطبيع القيم (Normalization) لتصبح بين 0 و 1 لضمان دقة الدمج
+                silica_n = l8_m.select("SR_B6").divide(l8_m.select("SR_B7")).unitScale(0.8, 2.0)
+                iron_n = s2_m.select("B4").divide(s2_m.select("B2")).unitScale(0.9, 2.2)
+                clay_n = s2_m.select("B11").divide(s2_m.select("B12")).unitScale(0.9, 2.0)
+                slope_n = ee.Terrain.slope(dem_m).unitScale(0, 45)
 
-                # 2. إنشاء الأقنعة الثنائية لكل محدد (Binary Masks)
-                mask_silica = silica_img.gt(silica_th)
-                mask_iron = iron_img.gt(iron_th)
-                mask_clay = clay_img.gt(clay_th)
-                mask_slope = slope_img.gt(slope_th)
+                # دمج المؤشرات بناءً على الأوزان المحددة
+                wpi_map = silica_n.multiply(w_silica) \
+                    .add(iron_n.multiply(w_iron)) \
+                    .add(clay_n.multiply(w_clay)) \
+                    .add(slope_n.multiply(w_slope)) \
+                    .rename("WPI_Target")
 
-                # 3. دمج التقاطعات منطقياً (Logical AND Intersection) لاستخراج عروق الهدف المرجحة
-                composite_target = mask_silica.And(mask_iron).And(mask_clay).And(mask_slope)
-
-                # 4. عرض خريطة التقاطع الموحدة
-                comp_thumb = composite_target.selfMask().getThumbURL({
+                wpi_thumb = wpi_map.getThumbURL({
                     "region": region,
                     "dimensions": "800x800",
                     "format": "jpg",
-                    "palette": ["yellow", "red"]
+                    "min": 0.1,
+                    "max": 0.8,
+                    "palette": ["blue", "green", "yellow", "orange", "red"]
                 })
 
-                st.success("✅ تم دمج المعطيات واستنباط خريطة التقاطعات المستهدفة بنجاح!")
-                st.subheader("🎯 خريطة التقاطع الاستكشافي الموحدة (مواقع عروق المرو والذهب المحتملة)")
-                st.image(comp_thumb, use_container_width=True, caption="🧭 اتجاه الشمال نحو الأعلى | التقاطعات الصفراء والحمراء تمثل مواقع العروق المستهدفة")
+                st.success("✅ تم حساب خريطة الاحتمالية الاستكشافية بنجاح!")
+                st.subheader("🎯 خريطة الاحتمال المرجح لعروق المرو والذهب")
+                st.image(wpi_thumb, use_container_width=True, caption="🧭 اتجاه الشمال نحو الأعلى | الألوان من الأزرق (أقل احتمالاً) إلى الأحمر (أعلى احتمالية للهدف)")
 
-                # رابط تحميل خريطة التقاطع كملف GeoTIFF
-                comp_download = composite_target.getDownloadURL({
-                    "name": "Composite_Gold_Target_Map",
+                wpi_download = wpi_map.getDownloadURL({
+                    "name": "Gold_Prospectivity_WPI_Map",
                     "region": aoi,
-                    "scale": 10,
+                    "scale": 15,
                     "format": "GEO_TIFF"
                 })
-                st.markdown(f"📥 [تحميل خريطة الدمج الاستكشافي بصيغة GeoTIFF للـ GIS]({comp_download})")
+                st.markdown(f"📥 [تحميل خريطة الاحتمالية بصيغة GeoTIFF للـ GIS]({wpi_download})")
 
             except Exception as e:
-                st.error(f"حدث خطأ أثناء تنفيذ نموذج الدمج البرمجي: {str(e)}")
+                st.error(f"حدث خطأ أثناء تنفيذ نموذج الاحتمالية: {str(e)}")
 
 with tab3:
     st.write("### 📍 التصدير الميداني المتجه (KML لـ Google Earth & AlpineQuest)")
