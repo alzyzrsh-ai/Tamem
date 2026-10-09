@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("🛰️ المنصة الفضائية المتقدمة لمعالجة الشذوذات المعدنية والهيدرولوجية")
-st.markdown("نظام معالجة سحابي حقيقي لاستخراج البيانات الجيوفيزيائية وتحليل القيم الفعلية.")
+st.markdown("نظام معالجة سحابي حقيقي لاستخراج البيانات الجيوفيزيائية وتصدير المتجهات الميدانية (KML).")
 
 # 2. تهيئة وتوثيق Google Earth Engine
 PROJECT_ID = "lively-armor-507414-s8"
@@ -73,7 +73,11 @@ show_thermal = st.sidebar.checkbox("الانبعاث الحراري (Thermal LST
 show_slope = st.sidebar.checkbox("انحدار المجرى (DEM Slope)", value=True)
 
 # تبويبات التطبيق الرئيسية
-tab1, tab2 = st.tabs(["🛰️ العرض والتحميل الفضائي", "📊 نافذة معالجة البيانات الفعلية (Real GEE Analytics)"])
+tab1, tab2, tab3 = st.tabs([
+    "🛰️ العرض والتحميل الفضائي", 
+    "📊 نافذة المعالجة الحقيقية والإحصائيات", 
+    "📍 استخراج وتصدير المتجهات (KML لـ AlpineQuest)"
+])
 
 with tab1:
     st.write(f"### 🛰️ الصور الفضائية ومقياس الدقة المكانية (Lat: {target_lat}, Lon: {target_lon})")
@@ -90,7 +94,6 @@ with tab1:
                 st.subheader(title_text)
                 st.image(thumb_url, use_container_width=True)
                 
-                # عرض المقياس ودليل الألوان بوضوح تحت كل صورة
                 st.caption(f"📐 **المقياس والدقة المكانية (Spatial Scale):** {scale_res} | 🎨 **نطاق القيم (Min/Max):** {vis_params.get('min')} إلى {vis_params.get('max')}")
                 
                 download_url = image_obj.getDownloadURL({
@@ -135,7 +138,7 @@ with tab1:
 
 with tab2:
     st.write("### 📊 نافذة المعالجة الحقيقية واستخراج الإحصائيات المكانية (Real GEE Computation)")
-    st.markdown("هذه النافذة تقوم بحساب **القيم الإحصائية الفعلية** (متوسط المؤشر، القيم العظمى والصغرى) مباشرة من خوادم Google Earth Engine بناءً على النطاق المحدد.")
+    st.markdown("هذه النافذة تقوم بحساب **القيم الإحصائية الفعلية** مباشرة من خوادم Google Earth Engine بناءً على النطاق المحدد.")
 
     selected_index_type = st.selectbox("اختر المؤشر لحساب إحصائياته الحقيقية:", [
         "نطاق أكسيد الحديد (Iron Oxide)",
@@ -147,7 +150,6 @@ with tab2:
     if st.button("🔄 تنفيذ الاستعلام الحقيقي من السحابة"):
         with st.spinner("جاري حساب القيم الفعلية من خوادم GEE..."):
             try:
-                # تجهيز الصور للمعالجة الحقيقية
                 s2_calc = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
                 l8_calc = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
                 dem_calc = ee.Image("JAXA/ALOS/AW3D30/V1_1").select("AVE").clip(aoi)
@@ -165,7 +167,6 @@ with tab2:
                     img_calc = ee.Terrain.slope(dem_calc).rename("val")
                     scale_val = 30
 
-                # حساب الإحصائيات الحقيقية باستخدام reduceRegion
                 stats = img_calc.reduceRegion(
                     reducer=ee.Reducer.mean().combine(
                         reducer2=ee.Reducer.max(), sharedInputs=True
@@ -196,3 +197,53 @@ with tab2:
 
             except Exception as e:
                 st.error(f"حدث خطأ أثناء المعالجة السحابية: {str(e)}")
+
+with tab3:
+    st.write("### 📍 التصدير الميداني المتجه (KML لـ Google Earth & AlpineQuest)")
+    st.markdown("تحويل الشذوذ الطيفي لعروق المرو أو خطوط الهدف إلى مضلعات هندسية جاهزة للاستخدام الحقلي.")
+
+    vector_target = st.selectbox("اختر الطبقة المراد تحويلها إلى متجهات:", [
+        "مؤشر السليكا وعروق الكوارتز (Landsat SWIR)",
+        "نطاق أكسيد الحديد (Iron Oxide)",
+        "التحول الطيني (Clay Alteration)"
+    ])
+
+    threshold_val = st.slider("عتبة فصل الشذوذ (Threshold):", 1.0, 2.5, 1.3, 0.05)
+
+    if st.button("🗺️ استخراج المتجهات وتوليد ملف KML الميداني"):
+        with st.spinner("جاري تحويل الشذوذات إلى مضلعات وخطوط متجهة (Vectors)..."):
+            try:
+                l8_v = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(aoi).sort("CLOUD_COVER").first().clip(aoi)
+                s2_v = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(aoi).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).sort("CLOUD_COVER").first().clip(aoi)
+                
+                if "السليكا" in vector_target:
+                    raw_img = l8_v.select("SR_B6").divide(l8_v.select("SR_B7"))
+                    scale_v = 30
+                elif "أكسيد الحديد" in vector_target:
+                    raw_img = s2_v.select("B4").divide(s2_v.select("B2"))
+                    scale_v = 10
+                else:
+                    raw_img = s2_v.select("B11").divide(s2_v.select("B12"))
+                    scale_v = 20
+
+                mask = raw_img.gt(threshold_val)
+
+                vectors = mask.selfMask().reduceToVectors(
+                    geometry=aoi,
+                    scale=scale_v,
+                    geometryType='polygon',
+                    eightConnected=True,
+                    maxPixels=1e9
+                )
+
+                kml_url = vectors.getDownloadURL({
+                    'format': 'kml',
+                    'filename': 'Target_Veins_KML'
+                })
+
+                st.success("✅ تم استخراج معالم الهدف المتجهة بنجاح!")
+                st.markdown(f"📥 **[انقر هنا لتحميل ملف الـ KML الميداني]({kml_url})**")
+                st.info("💡 **طريقة الاستخدام:** قم بتحميل الملف، ثم فتحه مباشرة في تطبيق **AlpineQuest** على هاتفك المحمول أو إفلاته في **Google Earth** لرؤية امتداد العروق والشذوذات مرسومة بدقة في الموقع الحقيقي.")
+
+            except Exception as e:
+                st.error(f"حدث خطأ أثناء استخراج المتجهات: {str(e)}")
