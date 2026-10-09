@@ -22,51 +22,49 @@ PROJECT_ID = "lively-armor-507414-s8"
 
 @st.cache_resource
 def init_earth_engine():
-    try:
-        if "GEE_SERVICE_ACCOUNT" in st.secrets:
-            gee_secret = st.secrets["GEE_SERVICE_ACCOUNT"]
+  try:
+    if "GEE_SERVICE_ACCOUNT" in st.secrets:
+      gee_secret = st.secrets["GEE_SERVICE_ACCOUNT"]
 
-            # معالجة النص في حال وجود رموز خاصة أو أسطر جديدة
-            if isinstance(gee_secret, str):
-                cleaned_secret = gee_secret.replace("\r", "").replace("\t", " ")
-                try:
-                    key_dict = json.loads(cleaned_secret, strict=False)
-                except Exception:
-                    key_dict = json.loads(
-                        cleaned_secret.replace("\n", "\\n"), strict=False
-                    )
-            else:
-                key_dict = dict(gee_secret)
+      # معالجة النص في حال وجود رموز خاصة أو أسطر جديدة
+      if isinstance(gee_secret, str):
+        cleaned_secret = gee_secret.replace("\r", "").replace("\t", " ")
+        try:
+          key_dict = json.loads(cleaned_secret, strict=False)
+        except Exception:
+          key_dict = json.loads(
+              cleaned_secret.replace("\n", "\\n"), strict=False
+          )
+      else:
+        key_dict = dict(gee_secret)
 
-            if "private_key" in key_dict and isinstance(
-                key_dict["private_key"], str
-            ):
-                key_dict["private_key"] = key_dict["private_key"].replace(
-                    "\\n", "\n"
-                )
+      if "private_key" in key_dict and isinstance(
+          key_dict["private_key"], str
+      ):
+        key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
 
-            project_name = key_dict.get("project_id", PROJECT_ID)
+      project_name = key_dict.get("project_id", PROJECT_ID)
 
-            credentials = ee.ServiceAccountCredentials(
-                key_dict["client_email"], key_data=json.dumps(key_dict)
-            )
-            # الربط الصريح بـ Project ID
-            ee.Initialize(credentials, project=project_name)
-            return True, "تم الاتصال بنجاح بخوادم Google Earth Engine!"
-        else:
-            ee.Initialize(project=PROJECT_ID)
-            return True, "تم الاتصال بالحساب الافتراضي!"
-    except Exception as e:
-        return False, f"فشل الاتصال: {str(e)}"
+      credentials = ee.ServiceAccountCredentials(
+          key_dict["client_email"], key_data=json.dumps(key_dict)
+      )
+      # الربط الصريح بـ Project ID
+      ee.Initialize(credentials, project=project_name)
+      return True, "تم الاتصال بنجاح بخوادم Google Earth Engine!"
+    else:
+      ee.Initialize(project=PROJECT_ID)
+      return True, "تم الاتصال بالحساب الافتراضي!"
+  except Exception as e:
+    return False, f"فشل الاتصال: {str(e)}"
 
 
 gee_ok, gee_msg = init_earth_engine()
 
 if not gee_ok:
-    st.error(gee_msg)
-    st.stop()
+  st.error(gee_msg)
+  st.stop()
 else:
-    st.sidebar.success(f"✅ GEE Connected ({PROJECT_ID})")
+  st.sidebar.success(f"✅ GEE Connected ({PROJECT_ID})")
 
 # 3. لوحة المدخلات الجانبية لتحديد أي منطقة في العالم
 st.sidebar.header("🎯 إعدادات منطقة الاستكشاف")
@@ -84,7 +82,7 @@ buffer_km = st.sidebar.slider(
     "نصف قطر نطاق الدراسة (كيلومتر):",
     min_value=1.0,
     max_value=20.0,
-    value=3.0,
+    value=2.0,
     step=0.5,
 )
 
@@ -93,7 +91,7 @@ point = ee.Geometry.Point([target_lon, target_lat])
 aoi = point.buffer(buffer_km * 1000)
 
 st.sidebar.markdown("---")
-st.sidebar.header("🎛️️ طبقات التحليل المتاحة")
+st.sidebar.header("🎛 طبقات التحليل المتاحة")
 show_sentinel_rgb = st.sidebar.checkbox(
     "صورة ألوان طبيعية Sentinel-2 RGB", value=True
 )
@@ -122,7 +120,7 @@ show_slope = st.sidebar.checkbox(
 s2 = (
     ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
     .filterBounds(aoi)
-    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 15))
+    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
     .sort("CLOUD_COVER")
     .first()
     .clip(aoi)
@@ -174,15 +172,19 @@ folium.TileLayer(
 ).add_to(m)
 
 
+# دالة الآمان لإضافة الطبقات لمنع توقف التطبيق
 def add_ee_layer(ee_image_object, vis_params, name):
-  map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
-  folium.TileLayer(
-      tiles=map_id_dict["tile_fetcher"].url_format,
-      attr="Google Earth Engine",
-      name=name,
-      overlay=True,
-      control=True,
-  ).add_to(m)
+  try:
+    map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
+    folium.TileLayer(
+        tiles=map_id_dict["tile_fetcher"].url_format,
+        attr="Google Earth Engine",
+        name=name,
+        overlay=True,
+        control=True,
+    ).add_to(m)
+  except Exception as e:
+    st.sidebar.warning(f"تعذر تحميل طبقة {name}: {str(e)}")
 
 
 if show_sentinel_rgb:
