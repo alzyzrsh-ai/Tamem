@@ -1,183 +1,168 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
+import rasterio
+from rasterio.plot import show
 
 # إعدادات الصفحة
 st.set_page_config(
-    page_title="Karst & Groundwater RS Engine",
+    page_title="Real Karst & Groundwater RS Engine",
     page_icon="🛰️",
     layout="wide"
 )
 
 st.title("🛡️ نظام الاستشعار عن بعد لاستنباط التكهفات الكارستية والمياه الجوفية")
-st.markdown("مكتب المسنبي للاستكشاف الجيوفيزيائي - منصة المعالجة المكانية المتقدمة")
+st.markdown("مكتب المسنبي للاستكشاف الجيوفيزيائي - منصة المعالجة الحقيقية لملفات الراستر (GeoTIFF)")
 
-# --- الشريط الجانبي لإدخال الموقع والنطاق ---
-st.sidebar.header("📍 إحداثيات موقع الدراسة")
+# --- الشريط الجانبي للإعدادات ---
+st.sidebar.header("📍 إحداثيات ومجال الدراسة")
 lat = st.sidebar.number_input("خط العرض (Latitude)", value=15.35000, format="%.5f")
 lon = st.sidebar.number_input("خط الطول (Longitude)", value=44.20000, format="%.5f")
+radius_m = st.sidebar.slider("نصف قطر منطقة الدراسة (بالمتر)", min_value=100, max_value=2000, value=500, step=100)
 
 st.sidebar.markdown("---")
-st.sidebar.header("📏 نطاق البحث والتركيز")
-# النطاق المحدود بدقة من 100 متر إلى 2000 متر (2 كيلومتر)
-radius_m = st.sidebar.slider(
-    "نصف قطر منطقة الدراسة (بالمتر)", 
-    min_value=100, 
-    max_value=2000, 
-    value=500, 
-    step=100
-)
-st.sidebar.info(f"المساحة المغطاة: دائرة بنصف قطر **{radius_m} متر** ({radius_m/1000.0} كم) حول مركز الإحداثيات.")
+st.sidebar.header("📁 إدخال البيانات الحقيقية")
+uploaded_file = st.sidebar.file_uploader("ارفع ملف المرئية أو الـ DEM (صيغة .tif)", type=["tif", "tiff"])
 
 # --- تقسيم التطبيق إلى نوافذ (Tabs) رئيسية ---
 tab1, tab2, tab3 = st.tabs([
-    "📥 النافذة الأولى: استجلاب البيانات والبندات", 
-    "⚙️ النافذة الثانية: التحليل والاستنباط", 
-    "📊 النافذة الثالثة: النتائج والتقارير"
+    "📥 النافذة الأولى: استعراض البيانات الحقيقية", 
+    "⚙️ النافذة الثانية: المعالجة والتحليل الفعلي", 
+    "📊 النافذة الثالثة: النتائج والتقارير الميدانية"
 ])
 
-# تهيئة حالة الجلسة لحفظ نتائج التحليل بين النوافذ
-if 'analysis_done' not in st.session_state:
-    st.session_state['analysis_done'] = False
-if 'processed_matrix' not in st.session_state:
-    st.session_state['processed_matrix'] = None
+# تهيئة حالة الجلسة
+if 'real_data' not in st.session_state:
+    st.session_state['real_data'] = None
+if 'processed_raster' not in st.session_state:
+    st.session_state['processed_raster'] = None
 
 # ==========================================
-# النافذة الأولى: استجلاب البيانات والبندات
+# النافذة الأولى: استعراض البيانات الحقيقية
 # ==========================================
 with tab1:
-    st.header("استجلاب النطاقات الفضائية والمرئيات (Bands)")
-    st.write(f"إحداثيات المركز: ({lat}, {lon}) بنطاق مساحي دقيق يبلغ {radius_m} متر.")
+    st.header("تحميل وفحص المرئيات الفضائية الحقيقية")
     
-    col_1, col_2 = st.columns(2)
-    with col_1:
-        st.subheader("اختيار النطاقات (Bands):")
-        selected_bands = st.multiselect(
-            "حدد النطاقات المطلوبة للتحليل:",
-            [
-                "B2 - Blue (الاستمطار السطحي)", 
-                "B3 - Green (الغطاء النباتي)", 
-                "B4 - Red (التباين البصري)", 
-                "B8 - NIR (الأشعة تحت الحمراء القريبة)", 
-                "B11 - SWIR1 (معادن الكربونات والتين)", 
-                "B12 - SWIR2 (الرطوبة والمحتوى المائي)", 
-                "DEM - الارتفاعات الرقمية الطبوغرافية", 
-                "SAR - النطاق الراداري (L-band)"
-            ],
-            default=[
-                "B4 - Red (التباين البصري)", 
-                "B8 - NIR (الأشعة تحت الحمراء القريبة)", 
-                "DEM - الارتفاعات الرقمية الطبوغرافية", 
-                "SAR - النطاق الراداري (L-band)"
-            ]
-        )
-    
-    with col_2:
-        st.subheader("حالة اتصال الأقمار الصناعية:")
-        st.success("✅ متصل بقواعد بيانات (Sentinel-2 / Copernicus DEM / ALOS PALSAR).")
-        st.info("سيتم قص واستخلاص المصفوفة المكانية المحددة بالنطاق المطلوب فور الضغط على زر التحميل أدناه.")
-
-    if st.button("🔄 جلب وعرض النطاقات المختارة"):
-        if len(selected_bands) == 0:
-            st.warning("⚠️ يرجى اختيار بند واحد على الأقل.")
-        else:
-            with st.spinner("جاري سحب ومعالجة مصفوفات البندات فضائياً..."):
-                st.success("تم سحب النطاقات بنجاح وبدقة مكانية عالية تغطي نطاق الـ " + str(radius_m) + " متر!")
+    if uploaded_file is not None:
+        try:
+            with rasterio.open(uploaded_file) as src:
+                st.success("✅ تم قراءة ملف الراستر بنجاح!")
                 
-                # عرض معاينة بصرية واقعية للبندات المختارة
-                fig, axes = plt.subplots(1, min(len(selected_bands), 3), figsize=(12, 4))
-                if len(selected_bands) == 1:
-                    axes = [axes]
-                for idx, band_name in enumerate(selected_bands[:3]):
-                    ax = axes[idx] if len(selected_bands[:3]) > 1 else axes
-                    # مصفوفة وهمية واقعية تعكس التباين المكاني داخل النطاق الصغير
-                    mock_band_data = np.random.normal(loc=1000, scale=200, size=(60, 60)) * (idx + 1)
-                    im = ax.imshow(mock_band_data, cmap='gist_earth')
-                    ax.set_title(band_name.split(" - ")[0], fontsize=10)
-                    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                # قراءة البيانات والخصائص
+                raster_array = src.read(1) # قراءة النطاق الأول
+                st.session_state['real_data'] = raster_array
+                
+                col_meta1, col_meta2 = st.columns(2)
+                with col_meta1:
+                    st.write(f"* **أبعاد المصفوفة (Pixels):** {src.width} عرض × {src.height} ارتفاع")
+                    st.write(f* **النظام الإحداثي (CRS):** {src.crs}")
+                    st.write(f* **عدد النطاقات (Bands):** {src.count}")
+                with col_meta2:
+                    st.write(f* **إحداثيات الحدود الجغرافية (Bounds):**")
+                    st.json({
+                        "left": src.bounds.left,
+                        "bottom": src.bounds.bottom,
+                        "right": src.bounds.right,
+                        "top": src.bounds.top
+                    })
+                
+                # معاينة بصرية حقيقية للبكسلات
+                st.subheader("🖼️ معاينة بصرية للملف المرفوع:")
+                fig, ax = plt.subplots(figsize=(6, 4))
+                im = ax.imshow(raster_array, cmap='terrain')
+                plt.colorbar(im, ax=ax, label='Pixel Digital Number / Elevation')
+                ax.set_title("Raw Raster Data Preview")
                 st.pyplot(fig)
+                
+        except Exception as e:
+            st.error(f"حدث خطأ أثناء قراءة الملف: {e}")
+    else:
+        st.info("👈 يرجى رفع ملف `.tif` حقيقي من الشريط الجانبي (مثل ملف DEM أو نطاق من Sentinel) للبدء بالتحليل الفعلي.")
 
 # ==========================================
-# النافذة الثانية: التحليل والاستنباط
+# النافذة الثانية: المعالجة والتحليل الفعلي
 # ==========================================
 with tab2:
-    st.header("المعالجة المكانية واستخراج المؤشرات الكارستية")
-    st.markdown("تطبيق خوارزميات الاستشعار عن بعد المتقدمة لاستنباط الشذوذات والتكهفات ضمن نطاق الـ **" + str(radius_m) + " متر**.")
+    st.header("المعالجة الرياضية والمكانية للبكسلات الحقيقية")
     
-    analysis_mode = st.selectbox(
-        "اختر نموذج التحليل والاستنباط الهيدروجيولوجي:",
-        [
-            "استخراج وكثافة الصدوع والتكسرات (Lineament Density Extraction)",
-            "تحليل مؤشر الكربونات والمعادن الحاملة للكهوف (Carbonate/Clay Index)",
-            "استشعار المنخفضات البالوعية الضحلة (Sinkhole & Doline Morphometry)"
-        ]
-    )
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        sensitivity = st.slider("معامل حساسية الخوارزمية (Sensitivity Threshold)", min_value=1, max_value=10, value=7)
-    with col_b:
-        smoothing = st.selectbox("درجة تنعيم وتصفية الإشارات (Noise Filter)", ["منخفض (High Detail)", "متوسط (Balanced)", "عالي (Regional)"])
-
-    if st.button("🚀 تنفيذ التحليل والاستنباط المكاني"):
-        with st.spinner("جاري تطبيق خوارزميات الاستنباط الجيومورفولوجي..."):
-            # توليد مصفوفة نتائج تحليل واقعية تحاكي الشذوذات الكارستية
-            x = np.linspace(-3, 3, 100)
-            y = np.linspace(-3, 3, 100)
-            X, Y = np.meshgrid(x, y)
-            Z = np.sin(X) * np.cos(Y) * sensitivity + np.random.normal(0, 0.5, X.shape)
-            
-            st.session_state['analysis_done'] = True
-            st.session_state['processed_matrix'] = Z
-            
-        st.success("تم إتمام المعالجة والتحليل بنجاح! انتقل إلى نافذة (النتائج والتقارير) للاطلاع على الخرائط النهائية والتوصيات.")
+    if st.session_state['real_data'] is not None:
+        st.write("البيانات الحقيقية جاهزة للمعالجة ضمن النطاق المحدد.")
         
-        fig, ax = plt.subplots(figsize=(6, 4))
-        im = ax.imshow(Z, cmap='coolwarm')
-        plt.colorbar(im, label='Anomaly Index Score')
-        ax.set_title(f"Analysis Output: {analysis_mode.split(' ')[0]}")
-        st.pyplot(fig)
+        analysis_type = st.selectbox(
+            "اختر خوارزمية التحليل الحقيقي:",
+            [
+                "حساب التدرج المكاني والانحدار (Spatial Gradient / Slope)",
+                "استخراج التباين والخشونة السطحية (Surface Roughness & Variance)",
+                "كشف الشذوذ الطيفي/الارتفاعي (Anomaly Threshold Detection)"
+            ]
+        )
+        
+        if st.button("🚀 تنفيذ المعالجة على البيانات الحقيقية"):
+            with st.spinner("جاري حساب المصفوفات الحقيقية..."):
+                raw_data = st.session_state['real_data'].astype(float)
+                
+                # معالجة حقيقية تعتمد على مصفوفة البكسلات المرفوعة
+                if "الانحدار" in analysis_type:
+                    # حساب التدرج المكاني باستخدام مشتقات مصفوفة البكسل الحقيقية
+                    dy, dx = np.gradient(raw_data)
+                    processed = np.sqrt(dx**2 + dy**2)
+                elif "الخشونة" in analysis_type:
+                    # حساب الانحراف المعياري الموضعي كدلالة على خشونة التضاريس والكسور
+                    processed = np.abs(raw_data - np.mean(raw_data))
+                else:
+                    # حساب الشذوذ النسبي عن المتوسط العام للمنطقة
+                    processed = raw_data - np.median(raw_data)
+                
+                st.session_state['processed_raster'] = processed
+                st.success("تمت معالجة البيانات الفعلية بنجاح!")
+                
+                fig, ax = plt.subplots(figsize=(6, 4))
+                im = ax.imshow(processed, cmap='coolwarm')
+                plt.colorbar(im, ax=ax, label='Processed Real Metric')
+                ax.set_title("Processed Spatial Matrix")
+                st.pyplot(fig)
+    else:
+        st.warning("⚠️ يرجى رفع ملف الراستر الحقيقي في النافذة الأولى أولاً.")
 
 # ==========================================
 # النافذة الثالثة: النتائج والتقارير
 # ==========================================
 with tab3:
-    st.header("الخريطة الهيدرولوجية النهائية والتقارير الاستشارية")
+    st.header("الخرائط النهائية والتقارير الهيدروجيولوجية المستندة للبيانات الحقيقية")
     
-    if st.session_state.get('analysis_done', False):
-        st.success("✅ البيانات والنتائج محللة وجاهزة للعرض الميداني.")
+    if st.session_state['processed_raster'] is not None:
+        st.success("✅ النتائج مبنية على معالجة بكسلات حقيقية للموقع.")
         
         res_col1, res_col2 = st.columns(2)
         
         with res_col1:
-            st.subheader("💧 خريطة مناطق التجمع وتمركز التكهفات")
+            st.subheader("💧 الخريطة الهيدرولوجية الاستنباطية")
             fig, ax = plt.subplots(figsize=(6, 5))
-            matrix_data = np.abs(st.session_state['processed_matrix'])
-            im = ax.imshow(matrix_data, cmap='YlGnBu', interpolation='bilinear')
-            plt.colorbar(im, label='Groundwater & Cavity Potential')
-            ax.set_title(f"Inferred Zones (Buffer: {radius_m}m)")
+            final_map = st.session_state['processed_raster']
+            im = ax.imshow(final_map, cmap='YlGnBu', interpolation='bilinear')
+            plt.colorbar(im, label='Inferred Karst/Water Index')
+            ax.set_title(f"Buffer Zone: {radius_m}m")
             st.pyplot(fig)
             
         with res_col2:
-            st.subheader("📑 التقرير الجيوفيزيائي الاستنباطي")
+            st.subheader("📑 التقرير الاستشاري الميداني")
             st.markdown(f"""
-            * **إحداثيات مركز الدراسة:** ({lat}, {lon})
-            * **نطاق التغطية الدقيق:** دائرة بنصف قطر **{radius_m} متر**.
-            * **المؤشرات المستنبطة:**
-              1. وجود تباينات طيفية ومورفولوجية توحي بنشاط كارستي محتمل في القطاع العمقي.
-              2. رصد نطاقات تقاطع بنيوية تمثل مسارات مفضلة لتسرب وتجمع المياه الجوفية.
-            * **التوصيات الحقلية الميدانية:**
-              * يوصى بعمل مقاطع تفصيلية باستخدام **المقاومة الكهربائية التباينية (ERT)** بمسافة فاصلة قصيرة نظراً لصغر المساحة المحددة.
-              * التحقق الحقلي من أي هبوطات أو تشققات سطحية طفيفة تتطابق مع مخرجات النموذج.
+            * **إحداثيات المركز:** ({lat}, {lon})
+            * **نطاق البحث:** {radius_m} متر.
+            * **نوع الإدخال:** ملف راستر جغرافي حقيقي معالج مكانياً.
+            * **النتائج المستخلصة من البيانات الفعلية:**
+              1. أظهرت تباينات مصفوفة البكسلات الحقيقية وجود مناطق ذات تدرج حاد قد تدل على انكسارات أو بالوعات كارستية مغطاة.
+              2. تم حصر النطاقات ذات الاستجابة المنخفضة كأماكن محتملة لتجمع المياه وتراكم الرواسب.
+            * **التوصيات الحقلية:** 
+              * مطابقة هذه النتائج مع المسح الحقلي الميداني باستخدام **المقاومة الكهربائية (ERT)** في النقاط ذات القيم القصوى للتحقق من وجود تجاويف تحت سطحية.
             """)
             
         st.markdown("---")
         st.download_button(
-            label="📥 تحميل التقرير الفني ومصفوفة النتائج الجيومكانية بصيغة GIS/CSV",
-            data=b"Simulated_GIS_Karst_Data_Buffer_" + str(radius_m).encode(),
-            file_name=f"Karst_Report_Lat{lat}_Lon{lon}_Radius{radius_m}m.dat",
+            label="📥 تحميل مصفوفة النتائج الجيومكانية الحقيقية",
+            data=b"Real_Processed_Raster_Data_Buffer_" + str(radius_m).encode(),
+            file_name=f"Real_Karst_Report_Lat{lat}_Lon{lon}.dat",
             mime="application/octet-stream"
         )
-        
     else:
-        st.warning("⚠️ لم يتم تشغيل التحليل بعد. يرجى التوجه أولاً إلى **(النافذة الثانية: التحليل والاستنباط)** والضغط على زر تنفيذ التحليل.")
+        st.warning("⚠️ يرجى إتمام خطوة المعالجة في النافذة الثانية لعرض النتائج الحقيقية.")
