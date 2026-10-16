@@ -2,7 +2,6 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 import rasterio
-from rasterio.plot import show
 
 # إعدادات الصفحة
 st.set_page_config(
@@ -48,17 +47,16 @@ with tab1:
             with rasterio.open(uploaded_file) as src:
                 st.success("✅ تم قراءة ملف الراستر بنجاح!")
                 
-                # قراءة البيانات والخصائص
-                raster_array = src.read(1) # قراءة النطاق الأول
+                raster_array = src.read(1)
                 st.session_state['real_data'] = raster_array
                 
                 col_meta1, col_meta2 = st.columns(2)
                 with col_meta1:
-                    st.write(f"* **أبعاد المصفوفة (Pixels):** {src.width} عرض × {src.height} ارتفاع")
-                    st.write(f* **النظام الإحداثي (CRS):** {src.crs}")
-                    st.write(f* **عدد النطاقات (Bands):** {src.count}")
+                    st.write(f"- **أبعاد المصفوفة (Pixels):** {src.width} عرض × {src.height} ارتفاع")
+                    st.write(f"- **النظام الإحداثي (CRS):** {src.crs}")
+                    st.write(f"- **عدد النطاقات (Bands):** {src.count}")
                 with col_meta2:
-                    st.write(f* **إحداثيات الحدود الجغرافية (Bounds):**")
+                    st.write("- **إحداثيات الحدود الجغرافية (Bounds):**")
                     st.json({
                         "left": src.bounds.left,
                         "bottom": src.bounds.bottom,
@@ -66,7 +64,6 @@ with tab1:
                         "top": src.bounds.top
                     })
                 
-                # معاينة بصرية حقيقية للبكسلات
                 st.subheader("🖼️ معاينة بصرية للملف المرفوع:")
                 fig, ax = plt.subplots(figsize=(6, 4))
                 im = ax.imshow(raster_array, cmap='terrain')
@@ -77,7 +74,7 @@ with tab1:
         except Exception as e:
             st.error(f"حدث خطأ أثناء قراءة الملف: {e}")
     else:
-        st.info("👈 يرجى رفع ملف `.tif` حقيقي من الشريط الجانبي (مثل ملف DEM أو نطاق من Sentinel) للبدء بالتحليل الفعلي.")
+        st.info("👈 يرجى رفع ملف .tif حقيقي من الشريط الجانبي (مثل ملف DEM أو نطاق من Sentinel) للبدء بالتحليل الفعلي.")
 
 # ==========================================
 # النافذة الثانية: المعالجة والتحليل الفعلي
@@ -101,16 +98,12 @@ with tab2:
             with st.spinner("جاري حساب المصفوفات الحقيقية..."):
                 raw_data = st.session_state['real_data'].astype(float)
                 
-                # معالجة حقيقية تعتمد على مصفوفة البكسلات المرفوعة
                 if "الانحدار" in analysis_type:
-                    # حساب التدرج المكاني باستخدام مشتقات مصفوفة البكسل الحقيقية
                     dy, dx = np.gradient(raw_data)
                     processed = np.sqrt(dx**2 + dy**2)
                 elif "الخشونة" in analysis_type:
-                    # حساب الانحراف المعياري الموضعي كدلالة على خشونة التضاريس والكسور
                     processed = np.abs(raw_data - np.mean(raw_data))
                 else:
-                    # حساب الشذوذ النسبي عن المتوسط العام للمنطقة
                     processed = raw_data - np.median(raw_data)
                 
                 st.session_state['processed_raster'] = processed
