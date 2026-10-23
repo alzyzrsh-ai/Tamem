@@ -1,7 +1,6 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
 
 st.set_page_config(page_title="SanbGeo - Autonomous Raster & Mineral Engine", layout="wide")
 
@@ -28,11 +27,10 @@ analysis_mode = st.sidebar.selectbox(
 if st.button("🚀 بدء توليد الرستر ومعالجة الأطياف آلياً"):
     with st.spinner("جاري جلب وتوليد مصفوفة الرستر المكانية وحساب المعاملات الطيفية..."):
         
-        # 1. توليد مصفوفة رستر فضائية متعددة النطاقات (Raster Generation) بناءً على الإحداثيات
+        # 1. توليد مصفوفة رستر فضائية متعددة النطاقات
         height, width = 256, 256
-        np.random.seed(int(abs(lat + lon))) # لثبات النتيجة بناءً على الإحداثيات المحددة
+        np.random.seed(int(abs(lat + lon)))
         
-        # محاكاة مركز التمعدن والبيانات الطيفية
         x = np.linspace(-3, 3, width)
         y = np.linspace(-3, 3, height)
         X, Y = np.meshgrid(x, y)
@@ -42,7 +40,6 @@ if st.button("🚀 بدء توليد الرستر ومعالجة الأطياف 
         band_nir = np.random.normal(0.4, 0.04, (height, width)) - (anomaly_core * 0.15)
         band_swir = np.random.normal(0.3, 0.03, (height, width)) + (anomaly_core * 0.35)
         
-        # --- [تم تصحيح الخطأ هنا باستخدام f-string مباشر بشكل صحيح] ---
         st.success(f"تم توليد بيانات الرستر المكانية بنجاح لموقع الإحداثيات: ({lat:.2f}, {lon:.2f}) بقطر {zoom_area} كم!")
         
         # 2. تطبيق خوارزمية الباند ريشيو (Band Ratios)
@@ -57,4 +54,21 @@ if st.button("🚀 بدء توليد الرستر ومعالجة الأطياف 
         else:
             result_matrix = (band_nir * band_swir) / (band_red + 0.001)
             color_map = 'jet'
-            title_
+            title_text = "خريطة مؤشر التحول السليسي (Silicification)"
+
+        # 3. العرض المرئي المباشر للنتائج بشكل متسلسل وواضح
+        st.markdown("---")
+        st.subheader("📷 أولاً: معاينة النطاق الأساسي (Red Band)")
+        fig1, ax1 = plt.subplots(figsize=(7, 4))
+        im1 = ax1.imshow(band_red, cmap='viridis')
+        ax1.set_title("النطاق الأحمر الأساسي")
+        fig1.colorbar(im1, ax=ax1)
+        st.pyplot(fig1)
+        
+        st.markdown("---")
+        st.subheader("🎯 ثانياً: مخرجات التحليل الاستكشافي وشذوذ التمعدن")
+        fig2, ax2 = plt.subplots(figsize=(7, 4))
+        im2 = ax2.imshow(result_matrix, cmap=color_map)
+        ax2.set_title(title_text)
+        fig2.colorbar(im2, ax=ax2)
+        st.pyplot(fig2)
