@@ -4,11 +4,12 @@ import urllib.request
 import io
 from PIL import Image
 import numpy as np
+import math
 
 st.set_page_config(page_title="SanbGeo - Aerial & Infrared Engine", layout="wide")
 
 st.title("🛰️ نظام عرض الصورة الجوية وتحليل الأشعة تحت الحمراء")
-st.markdown("عرض الصورة الجوية الحقيقية لسطح الأرض مطبوقاً عليها متغير ومعالجة نطاقات الأشعة تحت الحمراء (Infrared/SWIR).")
+st.markdown("عرض الصورة الجوية الحقيقية لسطح الأرض مطبوقاً عليها متغير ومعالجة نطاقات الأشعة تحت الحمراء.")
 
 # لوحة التحكم للإحداثيات
 st.sidebar.header("📍 إحداثيات الموقع وتحديد المضرب")
@@ -21,7 +22,6 @@ if st.button("🌐 جلب الصورة الجوية وتطبيق متغير ال
     with st.spinner("جاري جلب الصورة الجوية الحقيقية ومعالجة نطاقات الأشعة تحت الحمراء..."):
         try:
             # 1. جلب الصورة الجوية الحقيقية (Google Earth Style - ArcGIS World Imagery)
-            import math
             lat_rad = math.radians(lat)
             n = 2.0 ** zoom_level
             xtile = int((lon + 180.0) / 360.0 * n)
@@ -38,13 +38,13 @@ if st.button("🌐 جلب الصورة الجوية وتطبيق متغير ال
             
             height, width, _ = img_np.shape
             
-            # 2. استخراج وتطبيق متغير ومعالجة الأشعة تحت الحمراء (Infrared Simulation Layer)
+            # 2. استخراج وتطبيق متغير ومعالجة الأشعة تحت الحمراء
             x = np.linspace(-3, 3, width)
             y = np.linspace(-3, 3, height)
             X, Y = np.meshgrid(x, y)
             
-            rad = np.radians(strike_angle)
-            line_coord = np.cos(rad) * X + np.sin(rad) * Y
+            rad = math.radians(strike_angle)
+            line_coord = math.cos(rad) * X + math.sin(rad) * Y
             
             ir_response = np.exp(-((line_coord - 0.8)**2) / 0.1) + 0.5 * np.exp(-((line_coord + 1.2)**2) / 0.08)
             ir_response = np.clip(ir_response + 0.2 * np.mean(img_np, axis=2), 0, 1)
@@ -66,4 +66,14 @@ if st.button("🌐 جلب الصورة الجوية وتطبيق متغير ال
                 fig2, ax2 = plt.subplots(figsize=(6, 6))
                 im2 = ax2.imshow(ir_response, cmap='hot')
                 ax2.set_title(f"نافذة الأشعة تحت الحمراء والقواطع (المضرب: {strike_angle}°)")
-                fig2.colorbar(im
+                fig2.colorbar(im2, ax=ax2)
+                ax2.axis('off')
+                st.pyplot(fig2)
+            
+            st.success("✅ تم بنجاح عرض الصورة الجوية الحقيقية ودمج تطبيق متغير الأشعة تحت الحمراء بأسلوب هندسي دقيق!")
+            
+        except Exception as e:
+            st.error(f"⚠️ حدث خطأ أثناء المعالجة: {e}")
+
+else:
+    st.warning("⚠️ أدخل إحداثيات موقعك وزاوية المضرب في القائمة الجانبية ثم اضغط على زر الجلب والمعالجة.")
