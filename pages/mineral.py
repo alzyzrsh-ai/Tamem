@@ -6,10 +6,10 @@ from PIL import Image
 import numpy as np
 import math
 
-st.set_page_config(page_title="SanbGeo - Real Pixel Spectral Engine", layout="wide")
+st.set_page_config(page_title="SanbGeo - Blended Spectral Engine", layout="wide")
 
-st.title("🛰️ المنظومة الجيولوجية: استخراج الشذوذ من بكسلات الصورة الحقيقية")
-st.markdown("معالجة بكسلات الصورة الجوية الفعلية وتطبيق المعادلات الرياضية لاستخراج التمعدن الحقيقي دون أي رسومات افتراضية.")
+st.title("🛰️ المنظومة الجيولوجية: الدمج البصري والشفافية للشذوذ")
+st.markdown("دمج خريطة الشذوذ الطيفي المستخرجة من البكسلات الفعلية فوق الصورة الجوية الحقيقية مع تحكم كامل بالشفافية لضمان دقة المطابقة.")
 
 st.sidebar.header("📍 إحداثيات الموقع")
 lat = st.sidebar.number_input("خط العرض (Latitude)", value=15.3694, format="%.4f")
@@ -17,18 +17,20 @@ lon = st.sidebar.number_input("خط الطول (Longitude)", value=44.1910, form
 zoom_level = st.sidebar.slider("مستوى التقريب (Zoom Level)", min_value=10, max_value=17, value=14)
 
 st.sidebar.divider()
-st.sidebar.header("⚙️ معادلة الاستخلاص الطيفي للألوان الحقيقية")
+st.sidebar.header("⚙️ إعدادات الدمج والشفافية")
+alpha_val = st.sidebar.slider("شفافية خريطة الشذوذ (Opacity Alpha)", min_value=0.0, max_value=1.0, value=0.5, step=0.05)
+
 index_type = st.sidebar.selectbox(
     "اختر مؤشر المعالجة البكسلية:",
     [
         "مؤشر أكاسيد الحديد المرئي (Red / Green)",
         "مؤشر الشذوذ والتباين السطحي (Brightness Index)",
-        "مؤشر التشبع التعديني للصخور (Saturation Contrast)"
+        "مؤشر التشبع الطيفي للصخور (Saturation Contrast)"
     ]
 )
 
-if st.button("🌐 جلب الصورة الحقيقية واستخراج الشذوذ من بكسلاتها"):
-    with st.spinner("جاري جلب الصورة الجوية الحقيقية وتحليل بكسلاتها الفعلية..."):
+if st.button("🌐 تنفيذ الدمج البصري واستخراج الشذوذ بدقة"):
+    with st.spinner("جاري جلب الصورة الجوية ومعالجة البكسلات وتطبيق الدمج الشفاف..."):
         try:
             # 1. جلب الصورة الجوية الحقيقية لسطح الأرض
             lat_rad = math.radians(lat)
@@ -50,35 +52,31 @@ if st.button("🌐 جلب الصورة الحقيقية واستخراج الش�
             G = img_np[:, :, 1] + 0.001
             B = img_np[:, :, 2] + 0.001
             
-            # 3. تطبيق معادلات حقيقية مستمدة 100% من بكسلات الصورة الفعلية
+            # 3. تطبيق معادلات حقيقية مستمدة من البكسلات الفعلية
             if "أكاسيد الحديد" in index_type:
-                # مؤشر يعتمد على نسبة القناة الحمراء للأخضر لإبراز التعرية والتربة الصخرية
                 anomaly_matrix = R / G
-                map_title = "خريطة أكاسيد الحديد المستخرجة من بكسلات الصورة الفعلية (R / G)"
+                map_title = "دمج أكاسيد الحديد فوق الصورة الجوية (R / G)"
                 cmap_choice = 'hot'
             elif "التباين السطحي" in index_type:
-                # مؤشر السطوع والشدة التضاريسية الحقيقية
                 anomaly_matrix = np.sqrt((R**2 + G**2 + B**2) / 3.0)
-                map_title = "خريطة التباين والسطوع السطحي الحقيقي للموقع"
+                map_title = "دمج التباين والسطوع السطحي"
                 cmap_choice = 'plasma'
             else:
-                # مؤشر التشبع الطيفي الصخري
                 max_val = np.maximum(np.maximum(R, G), B)
                 min_val = np.minimum(np.minimum(R, G), B)
                 anomaly_matrix = (max_val - min_val) / (max_val + 0.001)
-                map_title = "خريطة التشبع الطيفي الصخري المستمدة من الألوان الحقيقية"
+                map_title = "دمج التشبع الطيفي الصخري"
                 cmap_choice = 'inferno'
 
-            # تطبيع مصفوفة النتائج المستخرجة من البكسلات الحقيقية لإبراز التباين بوضوح
             p_min, p_max = np.percentile(anomaly_matrix, (2, 98))
             final_anomaly = np.clip((anomaly_matrix - p_min) / (p_max - p_min + 1e-5), 0, 1)
 
-            # 4. العرض المرئي الثنائي جنباً إلى جنب
+            # 4. العرض المرئي المدمج (صورة مرجعية مستقلة + نافذة الدمج الشفاف الاحترافية)
             st.markdown("---")
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("🌍 1. الصورة الجوية الحقيقية للموقع")
+                st.subheader("🌍 1. الصورة الجوية الأصلية")
                 fig1, ax1 = plt.subplots(figsize=(6, 6))
                 ax1.imshow(img_np)
                 ax1.set_title(f"الصورة الحقيقية (Lat: {lat}, Lon: {lon})")
@@ -86,18 +84,21 @@ if st.button("🌐 جلب الصورة الحقيقية واستخراج الش�
                 st.pyplot(fig1)
                 
             with col2:
-                st.subheader("🎯 2. خريطة الشذوذ المستخرجة من البكسلات الفعلية")
+                st.subheader("🎯 2. الدمج الاحترافي (الصورة + الشذوذ بشفافية)")
                 fig2, ax2 = plt.subplots(figsize=(6, 6))
-                im2 = ax2.imshow(final_anomaly, cmap=cmap_choice)
+                # عرض الصورة الجوية كخلفية أساسية
+                ax2.imshow(img_np)
+                # إسقاط خريطة الشذوذ فوقها بدرجة شفافة (alpha) للتحكم الدقيق
+                im2 = ax2.imshow(final_anomaly, cmap=cmap_choice, alpha=alpha_val)
                 ax2.set_title(map_title)
                 fig2.colorbar(im2, ax=ax2)
                 ax2.axis('off')
                 st.pyplot(fig2)
             
-            st.success("🎉 تم بنجاح جلب الصورة الجوية الحقيقية ومعالجة بكسلاتها الفعلية لاستخراج خريطة الشذوذ بدقة مطلقة!")
+            st.success("🎉 تمت عملية دمج خريطة الشذوذ فوق الصورة الجوية الحقيقية مع التحكم بالشفافية بنجاح تام ودقة هندسية عالية!")
             
         except Exception as e:
-            st.error(f"⚠️ حدث خطأ أثناء معالجة البكسلات: {e}")
+            st.error(f"⚠️ حدث خطأ أثناء الدمج البصري: {e}")
 
 else:
-    st.warning("⚠️ أدخل إحداثيات موقعك في القائمة الجانبية ثم اضغط على زر المعالجة لاستخراج النتائج من البكسلات الحقيقية.")
+    st.warning("⚠️ حدد إحداثيات موقعك ومستوى الشفافية في القائمة الجانبية ثم اضغط على زر الدمج البصري.")
