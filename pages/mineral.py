@@ -88,3 +88,15 @@ if st.button("🌐 جلب بيانات القمر الصناعي الحقيقي 
                 im2 = ax2.imshow(result_matrix, cmap=color_map)
                 ax2.set_title(title_text)
                 fig2.colorbar(im2, ax=ax2)
+                st.pyplot(fig2)
+                
+                st.success("🎉 تم إتمام تحليل البيانات الفضائية الحقيقية بنجاح تام!")
+                
+            else:
+                st.warning("لم يتم العثور على صور حديثة خالية من الغيوم لهذه الإحداثيات، جرب إحداثيات أخرى.")
+                
+        except Exception as e:
+            st.error(f"حدث خطأ أثناء الاتصال بالأقمار الصناعية: {e}")
+
+else:
+    st.warning("⚠️ أدخل الإحداثيات المطلوبة في القائمة الجانبية ثم اضغط على زر الجلب والمعالجة الحية.")
