@@ -22,3 +22,5 @@ scikit-image
 opencv-python-headless
 earthengine-api
 planetary-computer
+pystac-client
+rioxarray
