@@ -1,103 +1,55 @@
 import streamlit as st
-import numpy as np
 import matplotlib.pyplot as plt
+import urllib.request
+import io
+from PIL import Image
 
-st.set_page_config(page_title="SanbGeo - Pure Geological Engine", layout="wide")
+st.set_page_config(page_title="SanbGeo - Real Aerial Image", layout="centered")
 
-st.title("🛰️ النظام الجيولوجي المحلي الموثوق: معالجة الأطياف والقواطع")
-st.markdown("منظومة محلية متكاملة لتحليل الأطياف وتطبيق المعادلات الرياضية لاستكشاف القواطع والتراكيب الخطية بدقة.")
+st.title("🛰️ عرض الصورة الجوية الحقيقية (Google Earth Style)")
+st.markdown("عرض مباشر لصورة الأقمار الصناعية الحقيقية لسطح الأرض بناءً على إحداثيات موقعك.")
 
-# لوحة التحكم الجانبية للإحداثيات والمعادلات
-st.sidebar.header("📍 إحداثيات موقع الاهتمام (AOI)")
+# لوحة التحكم لإدخال الإحداثيات
+st.sidebar.header("📍 إحداثيات الموقع")
 lat = st.sidebar.number_input("خط العرض (Latitude)", value=15.3694, format="%.4f")
 lon = st.sidebar.number_input("خط الطول (Longitude)", value=44.1910, format="%.4f")
-strike_angle = st.sidebar.slider("اتجاه مضرب القواطع والتراكيب (Strike Angle °)", min_value=0, max_value=180, value=45)
+zoom_level = st.sidebar.slider("مستوى التقريب (Zoom Level)", min_value=10, max_value=17, value=14)
 
-st.sidebar.divider()
-st.sidebar.header("⚙️ إعدادات المعادلة الطيفية")
-equation_mode = st.sidebar.selectbox(
-    "اختر المعادلة الرياضية للتحليل:",
-    [
-        "معادلة أكاسيد الحديد: SWIR1 / Red (كشف التعرية والقواطع النارية)",
-        "معادلة معادن الطين: SWIR1 / NIR (كشف التحول الحراري المائي)",
-        "مؤشر السيليكا والعروق الخطية: (NIR * SWIR1) / Red"
-    ]
-)
-
-if st.button("🚀 تشغيل المعالجة الطيفية الهندسية الفورية"):
-    with st.spinner("جاري حساب مصفوفة الأطياف وتطبيق المعادلات الرياضية استناداً للإحداثيات والمضرب..."):
-        
-        # شبكة مكانية محلية بحتة دقيقة ومستقرة 100%
-        height, width = 500, 500
-        np.random.seed(int(abs(lat * 100 + lon * 100)))
-        
-        x = np.linspace(-5, 5, width)
-        y = np.linspace(-5, 5, height)
-        X, Y = np.meshgrid(x, y)
-        
-        # 1. محاكاة الطيف المرئي والتضاريس الحقيقية (True Color RGB Shaded Relief)
-        terrain_base = 0.45 + 0.2 * np.sin(X * 0.7) * np.cos(Y * 0.7)
-        rgb_true = np.dstack((terrain_base * 1.05, terrain_base * 0.95, terrain_base * 0.85))
-        
-        # 2. تطبيق خوارزمية الاتجاه الهيكلي والمضرب (Strike Angle & Linear Dykes Equations)
-        rad = np.radians(strike_angle)
-        line_coord = np.cos(rad) * X + np.sin(rad) * Y
-        
-        # توليد الشذوذ الطيفي الخطي الحقيقي (القواطع والعروق) وفق المعادلات الجيولوجية
-        spectral_matrix = np.exp(-((line_coord - 1.0)**2) / 0.05) + 0.6 * np.exp(-((line_coord + 1.5)**2) / 0.04)
-        spectral_matrix += 0.25 * np.random.normal(0, 0.08, (height, width)) # تباين البكسلات الطبيعي
-        
-        # تطبيق المعالجة الرياضية بناءً على المعادلة المختارة
-        if "أكاسيد الحديد" in equation_mode:
-            processed_matrix = spectral_matrix * 1.5
-            map_title = f"مخرجات معادلة أكاسيد الحديد (اتجاه المضرب: {strike_angle}°)"
-            cmap_choice = 'hot'
-        elif "معادن الطين" in equation_mode:
-            processed_matrix = spectral_matrix * 1.3
-            map_title = f"مخرجات معادلة معادن الطين (اتجاه المضرب: {strike_angle}°)"
-            cmap_choice = 'plasma'
-        else:
-            processed_matrix = spectral_matrix * 1.6
-            map_title = f"مؤشر السيليكا والعروق الخطية (اتجاه المضرب: {strike_angle}°)"
-            cmap_choice = 'inferno'
+if st.button("🌐 جلب وعرض الصورة الجوية الحقيقية"):
+    with st.spinner("جاري جلب الصورة الجوية الحقيقية للموقع..."):
+        try:
+            # تحويل الإحداثيات إلى بلاطة خرائط (XYZ Tile) لجلب صورة حقيقية لسطح الأرض
+            import math
+            lat_rad = math.radians(lat)
+            n = 2.0 ** zoom_level
+            xtile = int((lon + 180.0) / 360.0 * n)
+            ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
             
-        # تطبيع ومعالجة التباين الرياضي (Contrast Stretching) لإبراز القواطع بوضوح تظليلي
-        p_min, p_max = np.percentile(processed_matrix, (10, 90))
-        enhanced_window = np.clip((processed_matrix - p_min) / (p_max - p_min + 1e-5), 0, 1)
-
-        # 3. العرض المرئي الثنائي (التضاريس البصرية + نافذة المعالجة الطيفية)
-        st.markdown("---")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("🌍 1. الطيف المرئي لسطح الأرض (True Color)")
-            fig1, ax1 = plt.subplots(figsize=(6, 5))
-            ax1.imshow(rgb_true)
-            ax1.set_title(f"التضاريس السطحية (Lat: {lat}, Lon: {lon})")
-            ax1.axis('off')
-            st.pyplot(fig1)
+            # رابط جلب الصورة الجوية الحقيقية (ArcGIS World Imagery أو Esri مشابه لجوجل إيرث)
+            tile_url = f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{zoom_level}/{ytile}/{xtile}"
             
-        with col2:
-            st.subheader("🎯 2. نافذة المعالجة الطيفية والرياضية للقواطع")
-            fig2, ax2 = plt.subplots(figsize=(6, 5))
-            im2 = ax2.imshow(enhanced_window, cmap=cmap_choice)
-            ax2.set_title(map_title)
-            fig2.colorbar(im2, ax=ax2)
-            ax2.axis('off')
-            st.pyplot(fig2)
-        
-        # دليل الدلالات العلمية
-        st.markdown("---")
-        st.subheader("📋 الدلالات العلمية للنافذة المعالجة:")
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            st.markdown("🔬 **القواطع الخطية (Dykes):** تظهر بوضوح ممتدة وفق زاوية المضرب المعطاة.")
-        with d2:
-            st.markdown("🔬 **التباين الطيفي:** يفصل بين الصخور المحيطة والشذوذ بدقة رياضية.")
-        with d3:
-            st.markdown("🔬 **الاستقرار:** نظام محلي لا يتأثر بأي أعطال سحابية خارجية.")
-        
-        st.success(f"🎉 تمت معالجة الموقع الجغرافي ({lat}, {lon}) واستخراج القواطع الخطية بنجاح تام ودون أي أخطاء!")
+            req = urllib.request.Request(
+                tile_url, 
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            with urllib.request.urlopen(req) as response:
+                image_data = response.read()
+                
+            img = Image.open(io.BytesIO(image_data))
+            
+            # عرض الصورة الجوية الحقيقية بوضوح
+            st.markdown("---")
+            st.subheader(f"🌍 الصورة الجوية الحقيقية للموقع (خط العرض: {lat}, خط الطول: {lon})")
+            
+            fig, ax = plt.subplots(figsize=(8, 8))
+            ax.imshow(img)
+            ax.axis('off')
+            st.pyplot(fig)
+            
+            st.success("✅ تم جلب وعرض الصورة الجوية الحقيقية بنجاح تام!")
+            
+        except Exception as e:
+            st.error(f"⚠️ حدث خطأ أثناء جلب الصورة: {e}")
 
 else:
-    st.warning("⚠️ أدخل الإحداثيات وزاوية المضرب في القائمة الجانبية ثم اضغط على زر التشغيل الفوري.")
+    st.warning("⚠️ أدخل الإحداثيات في القائمة الجانبية ثم اضغط على زر جلب الصورة الجوية لعرضها فوراً.")
