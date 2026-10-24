@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pystac_client import Client
 import planetary_computer
--import rioxarray
+import rioxarray
 import rasterio
 
 st.set_page_config(page_title="SanbGeo - Real Satellite Remote Sensing Engine", layout="wide")
@@ -30,7 +30,7 @@ analysis_mode = st.sidebar.selectbox(
 if st.button("🌐 جلب بيانات القمر الصناعي الحقيقي والمعالجة"):
     with st.spinner("جاري الاتصال بـ STAC API والبحث عن أحدث صور القمر الصناعي Sentinel-2 للموقع..."):
         try:
-        # 1. الاتصال بمرصد البيانات الفضائية (Planetary Computer)
+            # 1. الاتصال بمرصد البيانات الفضائية (Planetary Computer)
             catalog = Client.open("https://planetarycomputer.microsoft.com/stac", modifier=planetary_computer.sign_inplace)
             
             # تحديد حدود البحث الجغرافي (Bounding Box حول الإحداثيات)
@@ -50,7 +50,7 @@ if st.button("🌐 جلب بيانات القمر الصناعي الحقيقي 
                 item = items[0]
                 st.success(f"تم العثور على مشهد فضائي حقيقي بتاريخ: {item.datetime.strftime('%Y-%m-%d')}!")
                 
-                # ج روابط النطاقات الحقيقية (Red: B04, NIR: B08, SWIR1: B11)
+                # جلب روابط النطاقات الحقيقية (Red: B04, NIR: B08, SWIR1: B11)
                 red_url = planetary_computer.sign(item.assets["red"].href)
                 nir_url = planetary_computer.sign(item.assets["nir"].href)
                 swir_url = planetary_computer.sign(item.assets["swir16"].href)
@@ -88,15 +88,3 @@ if st.button("🌐 جلب بيانات القمر الصناعي الحقيقي 
                 im2 = ax2.imshow(result_matrix, cmap=color_map)
                 ax2.set_title(title_text)
                 fig2.colorbar(im2, ax=ax2)
-                st.pyplot(fig2)
-                
-                st.success("🎉 تم إتمام تحليل البيانات الفضائية الحقيقية بنجاح تام!")
-                
-            else:
-                st.warning("لم يتم العثور على صور حديثة خالية من الغيوم لهذه الإحداثيات، جرب إحداثيات أخرى.")
-                
-        except Exception as e:
-            st.error(f"حدث خطأ أثناء الاتصال بالأقمار الصناعية: {e}")
-
-else:
-    st.warning("⚠️ أدخل الإحداثيات المطلوبة في القائمة الجانبية ثم اضغط على زر الجلب والمعالجة الحية.")
