@@ -1,74 +1,102 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
+from pystac_client import Client
+import planetary_computer
+-import rioxarray
+import rasterio
 
-st.set_page_config(page_title="SanbGeo - Autonomous Raster & Mineral Engine", layout="wide")
+st.set_page_config(page_title="SanbGeo - Real Satellite Remote Sensing Engine", layout="wide")
 
-st.title("🛰️ المعجزة الجيومكانية: مولد ومعالج الرستر الآلي")
-st.markdown("نظام متكامل لتوليد البيانات المكانية، معالجة النطاقات الطيفية، واستكشاف التمعدن السطحي لحظياً.")
+st.title("🛰️ نظام الاستشعار الحقيقي: الاتصال بالأقمار الصناعية وتحليل الأطياف")
+st.markdown("جلب بيانات الأقمار الصناعية (Sentinel-2) حياً من السحابة بناءً على الإحداثيات الجغرافية وتطبيق مؤشرات التمعدن.")
 
-# لوحة التحكم الجانبية لإدخال الإحداثيات ومنطقة الاهتمام (AOI)
-st.sidebar.header("📍 إحداثيات منطقة البحث (AOI)")
+# لوحة التحكم الجانبية لإدخال الإحداثيات
+st.sidebar.header("📍 إحداثيات منطقة الاهتمام (AOI)")
 lat = st.sidebar.number_input("خط العرض (Latitude)", value=15.3694, format="%.4f")
 lon = st.sidebar.number_input("خط الطول (Longitude)", value=44.1910, format="%.4f")
-zoom_area = st.sidebar.slider("نطاق التغطية المكانية (كيلومتر)", min_value=1, max_value=50, value=10)
+buffer_deg = 0.05 # نطاق التغطية الجغرافية
 
 st.sidebar.divider()
-st.sidebar.header("⚙️ إعدادات النموذج الطيفي")
+st.sidebar.header("⚙️ إعدادات التحليل الطيفي")
 analysis_mode = st.sidebar.selectbox(
     "اختر نوع التحليل الاستكشافي:",
     [
-        "مؤشر أكاسيد الحديد (Iron Oxides - SWIR/NIR)",
-        "مؤشر نطاقات الهيدروكسيل والطين (Clay/Hydroxyl Minerals)",
-        "مؤشر التحول السليسي (Silicification Index)"
+        "مؤشر أكاسيد الحديد (Iron Oxides - SWIR/Red)",
+        "مؤشر معادن الطين والهيدروكسيل (Clay/Hydroxyl - SWIR/NIR)"
     ]
 )
 
-if st.button("🚀 بدء توليد الرستر ومعالجة الأطياف آلياً"):
-    with st.spinner("جاري جلب وتوليد مصفوفة الرستر المكانية وحساب المعاملات الطيفية..."):
-        
-        # 1. توليد مصفوفة رستر فضائية متعددة النطاقات
-        height, width = 256, 256
-        np.random.seed(int(abs(lat + lon)))
-        
-        x = np.linspace(-3, 3, width)
-        y = np.linspace(-3, 3, height)
-        X, Y = np.meshgrid(x, y)
-        anomaly_core = np.exp(-(X**2 + Y**2) / 1.5)
-        
-        band_red = np.random.normal(0.2, 0.02, (height, width)) + (anomaly_core * 0.1)
-        band_nir = np.random.normal(0.4, 0.04, (height, width)) - (anomaly_core * 0.15)
-        band_swir = np.random.normal(0.3, 0.03, (height, width)) + (anomaly_core * 0.35)
-        
-        st.success(f"تم توليد بيانات الرستر المكانية بنجاح لموقع الإحداثيات: ({lat:.2f}, {lon:.2f}) بقطر {zoom_area} كم!")
-        
-        # 2. تطبيق خوارزمية الباند ريشيو (Band Ratios)
-        if "أكاسيد الحديد" in analysis_mode:
-            result_matrix = band_swir / (band_red + 0.001)
-            color_map = 'hot'
-            title_text = "خريطة الشذوذ الطيفي لأكاسيد الحديد (Iron Oxides)"
-        elif "الهيدروكسيل" in analysis_mode:
-            result_matrix = band_swir / (band_nir + 0.001)
-            color_map = 'plasma'
-            title_text = "خريطة نطاقات الهيدروكسيل ومعادن الطين (Clays)"
-        else:
-            result_matrix = (band_nir * band_swir) / (band_red + 0.001)
-            color_map = 'jet'
-            title_text = "خريطة مؤشر التحول السليسي (Silicification)"
+if st.button("🌐 جلب بيانات القمر الصناعي الحقيقي والمعالجة"):
+    with st.spinner("جاري الاتصال بـ STAC API والبحث عن أحدث صور القمر الصناعي Sentinel-2 للموقع..."):
+        try:
+        # 1. الاتصال بمرصد البيانات الفضائية (Planetary Computer)
+            catalog = Client.open("https://planetarycomputer.microsoft.com/stac", modifier=planetary_computer.sign_inplace)
+            
+            # تحديد حدود البحث الجغرافي (Bounding Box حول الإحداثيات)
+            bbox = [lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg]
+            
+            # البحث عن مشاهد Sentinel-2 حديثة وخالية من الغيوم
+            search = catalog.search(
+                collections=["sentinel-2-l2a"],
+                bbox=bbox,
+                max_items=1,
+                query={"eo:cloud_cover": {"lt": 10}}
+            )
+            
+            items = list(search.items())
+            
+            if len(items) > 0:
+                item = items[0]
+                st.success(f"تم العثور على مشهد فضائي حقيقي بتاريخ: {item.datetime.strftime('%Y-%m-%d')}!")
+                
+                # ج روابط النطاقات الحقيقية (Red: B04, NIR: B08, SWIR1: B11)
+                red_url = planetary_computer.sign(item.assets["red"].href)
+                nir_url = planetary_computer.sign(item.assets["nir"].href)
+                swir_url = planetary_computer.sign(item.assets["swir16"].href)
+                
+                # قراءة نطاق مصغر من الصورة الحقيقية عبر Rasterio
+                with rasterio.open(red_url) as src_red:
+                    red_band = src_red.read(1, window=rasterio.windows.Window(100, 100, 500, 500)).astype(np.float32)
+                with rasterio.open(nir_url) as src_nir:
+                    nir_band = src_nir.read(1, window=rasterio.windows.Window(100, 100, 500, 500)).astype(np.float32)
+                with rasterio.open(swir_url) as src_swir:
+                    swir_band = src_swir.read(1, window=rasterio.windows.Window(100, 100, 500, 500)).astype(np.float32)
+                
+                # 2. تطبيق خوارزمية الباند ريشيو على البيانات الحقيقية
+                if "أكاسيد الحديد" in analysis_mode:
+                    result_matrix = swir_band / (red_band + 0.001)
+                    color_map = 'hot'
+                    title_text = "خريطة الشذوذ الحقيقي لأكاسيد الحديد (Sentinel-2)"
+                else:
+                    result_matrix = swir_band / (nir_band + 0.001)
+                    color_map = 'plasma'
+                    title_text = "خريطة معادن الطين الحقيقية (Sentinel-2)"
 
-        # 3. العرض المرئي المباشر للنتائج بشكل متسلسل وواضح
-        st.markdown("---")
-        st.subheader("📷 أولاً: معاينة النطاق الأساسي (Red Band)")
-        fig1, ax1 = plt.subplots(figsize=(7, 4))
-        im1 = ax1.imshow(band_red, cmap='viridis')
-        ax1.set_title("النطاق الأحمر الأساسي")
-        fig1.colorbar(im1, ax=ax1)
-        st.pyplot(fig1)
-        
-        st.markdown("---")
-        st.subheader("🎯 ثانياً: مخرجات التحليل الاستكشافي وشذوذ التمعدن")
-        fig2, ax2 = plt.subplots(figsize=(7, 4))
-        im2 = ax2.imshow(result_matrix, cmap=color_map)
-        ax2.set_title(title_text)
-        fig2.colorbar(im2, ax=ax2)
-        st.pyplot(fig2)
+                # 3. العرض المرئي للنتائج الحقيقية
+                st.markdown("---")
+                st.subheader("📷 أولاً: النطاق البصري الحقيقي (Red Band)")
+                fig1, ax1 = plt.subplots(figsize=(7, 4))
+                im1 = ax1.imshow(red_band, cmap='gray')
+                ax1.set_title("صورة الأقمار الصناعية الأصلية (سطح الأرض)")
+                fig1.colorbar(im1, ax=ax1)
+                st.pyplot(fig1)
+                
+                st.markdown("---")
+                st.subheader("🎯 ثانياً: مخرجات التحليل الطيفي الفضائي الحقيقي")
+                fig2, ax2 = plt.subplots(figsize=(7, 4))
+                im2 = ax2.imshow(result_matrix, cmap=color_map)
+                ax2.set_title(title_text)
+                fig2.colorbar(im2, ax=ax2)
+                st.pyplot(fig2)
+                
+                st.success("🎉 تم إتمام تحليل البيانات الفضائية الحقيقية بنجاح تام!")
+                
+            else:
+                st.warning("لم يتم العثور على صور حديثة خالية من الغيوم لهذه الإحداثيات، جرب إحداثيات أخرى.")
+                
+        except Exception as e:
+            st.error(f"حدث خطأ أثناء الاتصال بالأقمار الصناعية: {e}")
+
+else:
+    st.warning("⚠️ أدخل الإحداثيات المطلوبة في القائمة الجانبية ثم اضغط على زر الجلب والمعالجة الحية.")
