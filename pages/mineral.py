@@ -39,7 +39,6 @@ if st.button("🌐 جلب الصورة الجوية وتطبيق متغير ال
             height, width, _ = img_np.shape
             
             # 2. استخراج وتطبيق متغير ومعالجة الأشعة تحت الحمراء (Infrared Simulation Layer)
-            # بناءً على الإحداثيات وزاوية المضرب لتسليط الضوء على القواطع والتراكيب الحرارية
             x = np.linspace(-3, 3, width)
             y = np.linspace(-3, 3, height)
             X, Y = np.meshgrid(x, y)
@@ -47,11 +46,10 @@ if st.button("🌐 جلب الصورة الجوية وتطبيق متغير ال
             rad = np.radians(strike_angle)
             line_coord = np.cos(rad) * X + np.sin(rad) * Y
             
-            # محاكاة استجابة نطاق الأشعة تحت الحمراء (SWIR/NIR) لإبراز التباين الخطي
             ir_response = np.exp(-((line_coord - 0.8)**2) / 0.1) + 0.5 * np.exp(-((line_coord + 1.2)**2) / 0.08)
             ir_response = np.clip(ir_response + 0.2 * np.mean(img_np, axis=2), 0, 1)
 
-            # 3. العرض المرئي الثنائي جنباً إلى جنب (الصورة الجوية الحقيقية + نافذة الأشعة تحت الحمراء)
+            # 3. العرض المرئي الثنائي جنباً إلى جنب
             st.markdown("---")
             col1, col2 = st.columns(2)
             
@@ -68,14 +66,4 @@ if st.button("🌐 جلب الصورة الجوية وتطبيق متغير ال
                 fig2, ax2 = plt.subplots(figsize=(6, 6))
                 im2 = ax2.imshow(ir_response, cmap='hot')
                 ax2.set_title(f"نافذة الأشعة تحت الحمراء والقواطع (المضرب: {strike_angle}°)")
-                fig2.colorbar(im2, ax=ax2)
-                ax2.axis('off')
-                st.pyplot(fig2)
-            
-            st.success("✅ تم بنجاح عرض الصورة الجوية الحقيقية ودمج تطبيق متغير الأشعة تحت الحمراء بأسلوب هندسي دقيق!")
-            
-        except Exception as e:
-            st.error(f>⚠️ حدث خطأ أثناء المعالجة: {e}")
-
-else:
-    st.warning("⚠️ أدخل إحداثيات موقعك وزاوية المضرب في القائمة الجانبية ثم اضغط على زر الجلب والمعالجة.")
+                fig2.colorbar(im
