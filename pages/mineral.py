@@ -18,7 +18,9 @@ lon = st.sidebar.number_input("خط الطول (Longitude)", value=44.1910, form
 buffer_deg = 0.05
 
 st.sidebar.divider()
-st.sidebar.header("⚙️ إعدادات التحليل الطيفي")
+st.sidebar.header("⚙️ إعدادات البحث والتحليل الطيفي")
+# زر تحكم بمرونة نسبة الغيوم لضمان إيجاد نتائج فورية
+cloud_max = st.sidebar.slider("أقصى نسبة غيوم مسموحة (%)", min_value=5, max_value=80, value=40)
 analysis_mode = st.sidebar.selectbox(
     "اختر نوع التحليل الاستكشافي:",
     [
@@ -33,18 +35,20 @@ if st.button("🌐 جلب بيانات القمر الصناعي الحقيقي 
             catalog = Client.open("https://planetarycomputer.microsoft.com/stac", modifier=planetary_computer.sign_inplace)
             bbox = [lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg]
             
+            # توسيع نطاق البحث الزمني وزيادة مرونة نسبة الغيوم
             search = catalog.search(
                 collections=["sentinel-2-l2a"],
                 bbox=bbox,
-                max_items=1,
-                query={"eo:cloud_cover": {"lt": 10}}
+                datetime="2023-01-01/2026-10-24",
+                max_items=5,
+                query={"eo:cloud_cover": {"lt": cloud_max}}
             )
             
             items = list(search.items())
             
             if len(items) > 0:
                 item = items[0]
-                st.success(f"تم العثور على مشهد فضائي حقيقي بتاريخ: {item.datetime.strftime('%Y-%m-%d')}!")
+                st.success(f"تم العثور على مشهد فضائي حقيقي بتاريخ: {item.datetime.strftime('%Y-%m-%d')} بنسبة غيوم مقبولة!")
                 
                 red_url = planetary_computer.sign(item.assets["red"].href)
                 nir_url = planetary_computer.sign(item.assets["nir"].href)
@@ -84,7 +88,7 @@ if st.button("🌐 جلب بيانات القمر الصناعي الحقيقي 
                 
                 st.success("🎉 تم إتمام تحليل البيانات الفضائية الحقيقية بنجاح تام!")
             else:
-                st.warning("لم يتم العثور على صور حديثة خالية من الغيوم لهذه الإحداثيات، جرب إحداثيات أخرى.")
+                st.warning("⚠️ لم يتم العثور على صور. جرب زيادة 'أقصى نسبة غيوم مسموحة' من القائمة الجانبية أو تغيير الإحداثيات.")
         except Exception as e:
             st.error(f"حدث خطأ أثناء الاتصال بالأقمار الصناعية: {e}")
 else:
