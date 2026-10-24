@@ -5,19 +5,27 @@ from pystac_client import Client
 import planetary_computer
 import rasterio
 
-st.set_page_config(page_title="SanbGeo - Real Global Mineral Exploration Engine", layout="wide")
+st.set_page_config(page_title="SanbGeo - Smart Global Sentinel Engine", layout="wide")
 
-st.title("🛰️ المنظومة الجيولوجية الحقيقية للاستشعار عن بعد (Global STAC Engine)")
-st.markdown("استعلام حقيقي مباشر عن أي إحداثيات في العالم عبر أحدث صور الأقمار الصناعية (Sentinel-2 L2A) واستخراج الشذوذ الطيفي الفعلي.")
+st.title("🛰️ المنظومة الجيولوجية الذكية للاستشعار عن بعد (Smart STAC Engine)")
+st.markdown("محرك بحث سحابي ذكي يتكيف تلقائياً لجلب أحدث بيانات الأقمار الصناعية الحقيقية لأي إحداثيات في العالم.")
 
+# لوحة التحكم الجانبية للإحداثيات مع خيار التحميل السريع لمنطقة تجريبية مضمونة
 st.sidebar.header("📍 إحداثيات منطقة البحث (AOI)")
-lat = st.sidebar.number_input("خط العرض (Latitude)", value=29.8500, format="%.4f")
-lon = st.sidebar.number_input("خط الطول (Longitude)", value=90.7500, format="%.4f")
+
+# زر مساعدة لاختيار منطقة تجريبية معروفة بغناها المعدني ومضمونة التغطية
+load_preset = st.sidebar.button("🌟 تحميل إحداثيات منطقة تجريبية (قولوغ - التبت)")
+if load_preset:
+    default_lat, default_lon = 29.8500, 90.7500
+else:
+    default_lat, default_lon = 15.3694, 44.1910
+
+lat = st.sidebar.number_input("خط العرض (Latitude)", value=default_lat, format="%.4f")
+lon = st.sidebar.number_input("خط الطول (Longitude)", value=default_lon, format="%.4f")
 buffer_deg = 0.08
 
 st.sidebar.divider()
-st.sidebar.header("⚙️ إعدادات البحث الفضائي")
-cloud_max = st.sidebar.slider("أقصى نسبة غيوم مسموحة (%)", min_value=10, max_value=100, value=50)
+st.sidebar.header("⚙️ إعدادات التحليل الطيفي")
 analysis_mode = st.sidebar.selectbox(
     "اختر مؤشر التحليل الطيفي:",
     [
@@ -26,30 +34,44 @@ analysis_mode = st.sidebar.selectbox(
     ]
 )
 
-if st.button("🌐 جلب وتحليل البيانات الحقيقية للموقع"):
-    with st.spinner("جاري الاتصال بقاعدة بيانات الأقمار الصناعية العالمية والبحث عن مشهد حقيقي..."):
+if st.button("🌐 جلب وتحليل البيانات الحقيقية بذكاء"):
+    with st.spinner("جاري الاتصال السحابي والبحث الذكي عن أفضل مشهد فضائي متاح للموقع..."):
         try:
-            # الاتصال بمرصد مايكروسوفت للبيانات المكانية (STAC API)
             catalog = Client.open("https://planetarycomputer.microsoft.com/stac", modifier=planetary_computer.sign_inplace)
             bbox = [lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg]
             
+            # محاولة البحث الأولى (فلتر متقدم حديث)
             search = catalog.search(
                 collections=["sentinel-2-l2a"],
                 bbox=bbox,
-                datetime="2023-01-01/2026-10-24",
-                max_items=3,
-                query={"eo:cloud_cover": {"lt": cloud_max}}
+                datetime="2024-01-01/2026-10-24",
+                max_items=5,
+                query={"eo:cloud_cover": {"lt": 30}}
             )
-            
             items = list(search.items())
             
+            # محاولة بحث احتياطية ذكية (توسيع النطاق الزمني وزيادة نسبة الغيوم تلقائياً إذا لمשkد نتائج)
             if len(items) == 0:
-                st.error("❌ لم يتم العثور على أي مشهد فضائي حقيقي مطابق في هذه الإحداثيات (قد تكون المنطقة مغطاة بالغيوم أو خارج نطاق التغطية الحديثة). جرب إحداثيات أخرى لمناطق مكشوفة.")
+                st.info("🔄 جاري توسيع نطاق البحث في الأرشيف السحابي لضمان جلب تغطية للمنطقة...")
+                search = catalog.search(
+                    collections=["sentinel-2-l2a"],
+                    bbox=bbox,
+                    datetime="2020-01-01/2026-10-24",
+                    max_items=10,
+                    query={"eo:cloud_cover": {"lt": 80}}
+                )
+                items = list(search.items())
+            
+            if len(items) == 0:
+                st.error("❌ عذراً، هذه الإحداثيات تقع في منطقة لا تتوفر لها بيانات تغطية حديثة في الأقمار الصناعية (مثل المحيطات أو مناطق غير مسوحة). جرب إحداثيات اليابسة أو اضغط على زر المنطقة التجريبية في القائمة الجانبية.")
             else:
+                # اختيار المشهد الأقل غيوماً ذكياً
+                items.sort(key=lambda x: x.properties.get("eo:cloud_cover", 100))
                 item = items[0]
-                st.success(f"✅ تم العثور على مشهد فضائي حقيقي بتاريخ: {item.datetime.strftime('%Y-%m-%d')}")
+                cloud_val = item.properties.get("eo:cloud_cover", 0)
+                st.success(f"✅ تم بنجاح العثور على مشهد فضائي حقيقي بتاريخ: {item.datetime.strftime('%Y-%m-%d')} (نسبة الغيوم: {cloud_val:.1f}%)")
                 
-                # جلب النطاقات الحقيقية للأقمار الصناعية
+                # جلب النطاقات الحقيقية
                 b2_url = planetary_computer.sign(item.assets["B02"].href)
                 b3_url = planetary_computer.sign(item.assets["B03"].href)
                 b4_url = planetary_computer.sign(item.assets["B04"].href)
@@ -64,18 +86,15 @@ if st.button("🌐 جلب وتحليل البيانات الحقيقية للم�
                 with rasterio.open(b8_url) as src: b8 = src.read(1, window=win).astype(np.float32)
                 with rasterio.open(b11_url) as src: b11 = src.read(1, window=win).astype(np.float32)
                 
-                # معالجة القيم الصفرية لتجنب أخطاء القسمة
                 b4 = np.where(b4 <= 0, 0.001, b4)
                 b8 = np.where(b8 <= 0, 0.001, b8)
                 
-                # تطبيع الصورة المرئية RGB لتظهر التضاريس الطبيعية بدقة
                 def norm(band):
                     p2, p98 = np.percentile(band, (2, 98))
                     return np.clip((band - p2) / (p98 - p2 + 1e-5), 0, 1)
                 
                 rgb_bg = np.dstack((norm(b4), norm(b3), norm(b2)))
                 
-                # حساب الشذوذ الحقيقي بناءً على البكسلات الفعلية للقمر الصناعي
                 if "أكاسيد الحديد" in analysis_mode:
                     anomaly_matrix = b11 / b4
                     cmap_choice = 'hot'
@@ -85,7 +104,6 @@ if st.button("🌐 جلب وتحليل البيانات الحقيقية للم�
                     cmap_choice = 'plasma'
                     title_text = "خريطة الشذوذ الطيفي الحقيقي لمعادن الطين (B11/B08)"
 
-                # العرض المرئي للنتائج الحقيقية فقط
                 st.markdown("---")
                 col1, col2 = st.columns(2)
                 
@@ -112,4 +130,4 @@ if st.button("🌐 جلب وتحليل البيانات الحقيقية للم�
             st.error(f"⚠️ حدث خطأ تقني أثناء الاتصال بالخادم السحابي: {e}")
 
 else:
-    st.warning("⚠️ أدخل إحداثيات أي منطقة في العالم في القائمة الجانبية ثم اضغط على زر الجلب والتحليل الحقيقي.")
+    st.warning("⚠️ أدخل إحداثيات موقعك أو اضغط زر المنطقة التجريبية في القائمة الجانبية ثم اضغط زر الجلب والتحليل.")
